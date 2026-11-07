@@ -1,0 +1,40 @@
+# ---------- 本地开发与工具产物 ----------
+/.tmp/
+/.dev/
+/.shots/
+/dist/
+
+# ---------- 编辑器 / 系统 ----------
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# ---------- 密钥与本地数据（严禁提交）----------
+server/.env
+server/.env.*
+!server/.env.example
+server/data/
+server/logs/
+server/bin/
+
+# ---------- 管理后台构建产物（由 admin 构建生成后 embed 进二进制）----------
+server/webassets/dist/*
+!server/webassets/dist/.gitkeep
+
+# ---------- Node / 管理后台 ----------
+node_modules/
+admin/dist/
+
+# ---------- Flutter / Android ----------
+family_ledger/.dart_tool/
+family_ledger/build/
+family_ledger/coverage/
+family_ledger/android/.gradle/
+family_ledger/android/.kotlin/
+family_ledger/android/local.properties
+family_ledger/.flutter-plugins-dependencies
+
+# ---------- 个人笔记 ----------
+笔记.ini
