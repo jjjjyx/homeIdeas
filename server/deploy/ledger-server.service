@@ -1,0 +1,36 @@
+[Unit]
+Description=Family Ledger Server (家庭记账本)
+Documentation=https://github.com/your-name/family-ledger
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ledger
+Group=ledger
+WorkingDirectory=/opt/family-ledger
+
+# 密码等敏感配置放这里，权限 600
+EnvironmentFile=/etc/family-ledger/env
+Environment=APP_ENV=prod
+Environment=HTTP_ADDR=127.0.0.1:8080
+Environment=DB_PATH=/opt/family-ledger/data/app.db
+
+ExecStart=/opt/family-ledger/ledger-server
+Restart=always
+RestartSec=3
+
+# 最小权限
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/family-ledger/data
+LimitNOFILE=4096
+
+# 日志走 journald：journalctl -u family-ledger -f
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

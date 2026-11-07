@@ -1,0 +1,30 @@
+# Caddy 反代：自动申请 HTTPS 证书
+# 改掉域名后再 `sudo caddy reload --config /etc/caddy/Caddyfile`
+
+ledger.example.com {
+	encode gzip
+
+	# 管理后台静态资源可以长缓存（文件名带 hash）
+	@assets path /admin/assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+
+	reverse_proxy 127.0.0.1:8080 {
+		# 让后端能拿到真实 IP（审计日志用）
+		header_up X-Real-Ip {remote_host}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/ledger.log {
+			roll_size 20mb
+			roll_keep 5
+		}
+	}
+}
