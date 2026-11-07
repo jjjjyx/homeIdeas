@@ -1,0 +1,43 @@
+{
+    "account":  {
+                    "id":  "01a19731-2d33-7d53-a3a3-a2ac55076558",
+                    "name":  "现金",
+                    "kind":  "cash",
+                    "sort_order":  0,
+                    "rev":  1,
+                    "updated_at":  1793537944883
+                },
+    "member":  {
+                   "user_id":  "01a19731-2d23-79da-a880-6fe29372fb05",
+                   "nickname":  "爸爸",
+                   "account":  "papa43799",
+                   "role":  "owner",
+                   "joined_at":  1793537944883
+               },
+    "transaction":  {
+                        "id":  "01a19731-3000-7cc1-bb4b-ac2324da680e",
+                        "family_id":  "01a19731-2d33-759e-97a0-1458df8208df",
+                        "type":  0,
+                        "amount_cents":  9900,
+                        "category_id":  "01a19731-2d33-759f-8d6f-3ab05ab0ec2b",
+                        "member_id":  "01a19731-2d23-79da-a880-6fe29372fb05",
+                        "occurred_at":  1793537945582,
+                        "note":  "私房钱",
+                        "visibility":  "private",
+                        "rev":  6,
+                        "created_at":  1793537945600,
+                        "updated_at":  1793537945600
+                    },
+    "has_more":  false,
+    "category":  {
+                     "id":  "01a19731-2d33-759f-8d6f-3ab05ab0ec2b",
+                     "name":  "餐饮",
+                     "type":  0,
+                     "icon_key":  "restaurant",
+                     "color":  4293874512,
+                     "sort_order":  0,
+                     "rev":  1,
+                     "updated_at":  1793537944883
+                 },
+    "cursor":  8
+}

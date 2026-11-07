@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自建家庭账本常见部署是「局域网 + 自己的服务器」，很多人先用 HTTP 跑通，
+  所以这里允许明文流量。正式对公网部署请务必在 Caddy/Nginx 上开 HTTPS
+  （deploy/Caddyfile 已包含），并把 cleartextTrafficPermitted 改回 false。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
