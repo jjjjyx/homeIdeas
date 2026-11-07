@@ -1,0 +1,11 @@
+bin/
+data/
+.smoke-tmp/
+*.exe
+*.test
+*.out
+
+# 本地密钥（模板见 .env.example）
+.env
+.env.*
+!.env.example
