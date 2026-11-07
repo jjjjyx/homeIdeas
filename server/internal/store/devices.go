@@ -137,13 +137,13 @@ func (d *DB) AllDevices(ctx context.Context, q Querier, limit int, includeExpire
 	return out, rows.Err()
 }
 
-// ApproveDevice 绑定用户/家庭/角色
-func (d *DB) ApproveDevice(ctx context.Context, q Querier, id, userID, familyID, role, approvedBy string, now int64) error {
+// ApproveDevice 绑定用户/角色。单家庭模式下不再需要指定家庭。
+func (d *DB) ApproveDevice(ctx context.Context, q Querier, id, userID, role, approvedBy string, now int64) error {
 	_, err := q.ExecContext(ctx, `
-		UPDATE devices SET status = 'approved', user_id = ?, family_id = ?, role = ?,
+		UPDATE devices SET status = 'approved', user_id = ?, role = ?,
 			approved_at = ?, approved_by = ?, last_seen_at = ?
 		WHERE id = ? AND status = 'pending'`,
-		userID, nullIfEmpty(familyID), nullIfEmpty(role), now, approvedBy, now, id)
+		userID, nullIfEmpty(role), now, approvedBy, now, id)
 	return err
 }
 
@@ -221,4 +221,76 @@ func (d *DB) SupersedeDevicesByKey(ctx context.Context, q Querier, deviceKey, ke
 		}
 	}
 	return ids, nil
+}
+
+// DeviceByKey 按物理设备标识取「已授权」记录（授权是永久的）
+func (d *DB) DeviceByKey(ctx context.Context, q Querier, deviceKey string) (*domain.Device, error) {
+	if deviceKey == "" {
+		return nil, domain.ErrNotFound
+	}
+	return scanDevice(q.QueryRowContext(ctx, `SELECT `+deviceColumns+`
+		FROM devices WHERE device_key = ? AND status = 'approved' LIMIT 1`, deviceKey))
+}
+
+// DevicesOfMember 某个成员名下的所有设备
+func (d *DB) DevicesOfMember(ctx context.Context, q Querier, userID string) ([]domain.Device, error) {
+	rows, err := q.QueryContext(ctx, `SELECT `+deviceColumns+`
+		FROM devices WHERE user_id = ? AND status = 'approved'
+		ORDER BY last_seen_at DESC, created_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]domain.Device, 0, 4)
+	for rows.Next() {
+		dev, err := scanDevice(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *dev)
+	}
+	return out, rows.Err()
+}
+
+// DeleteDevice 解绑设备（连同它的刷新令牌一起作废）
+func (d *DB) DeleteDevice(ctx context.Context, q Querier, deviceID string) error {
+	res, err := q.ExecContext(ctx, `DELETE FROM devices WHERE id = ?`, deviceID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
+// PendingDeviceByKey 已经发起过配对但还没批准的记录，避免同一台设备堆多条
+func (d *DB) PendingDeviceByKey(ctx context.Context, q Querier, deviceKey string) (*domain.Device, error) {
+	if deviceKey == "" {
+		return nil, domain.ErrNotFound
+	}
+	return scanDevice(q.QueryRowContext(ctx, `SELECT `+deviceColumns+`
+		FROM devices WHERE device_key = ? AND status = 'pending' LIMIT 1`, deviceKey))
+}
+
+// RefreshPendingDevice 复用已有的待授权记录（同一台设备重试配对时不新增行）
+func (d *DB) RefreshPendingDevice(ctx context.Context, q Querier, id, pairCode, pairSecretHash,
+	model, osVersion, appVersion, ip string, expiresAt, now int64) error {
+	_, err := q.ExecContext(ctx, `
+		UPDATE devices SET pair_code = ?, pair_secret = ?, model = ?, os_version = ?,
+			app_version = ?, ip = ?, expires_at = ?, created_at = ?,
+			status = 'pending', user_id = NULL, family_id = NULL, role = NULL,
+			approved_at = NULL, approved_by = NULL
+		WHERE id = ?`,
+		pairCode, pairSecretHash, model, osVersion, appVersion, ip, expiresAt, now, id)
+	return err
+}
+
+// DeviceByKeyAny 不看状态取这台设备的记录（设备被解绑/拒绝后重新配对时复用同一行）
+func (d *DB) DeviceByKeyAny(ctx context.Context, q Querier, deviceKey string) (*domain.Device, error) {
+	if deviceKey == "" {
+		return nil, domain.ErrNotFound
+	}
+	return scanDevice(q.QueryRowContext(ctx, `SELECT `+deviceColumns+`
+		FROM devices WHERE device_key = ? LIMIT 1`, deviceKey))
 }

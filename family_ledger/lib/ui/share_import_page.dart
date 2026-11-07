@@ -17,7 +17,6 @@ class ShareImportPage extends StatefulWidget {
   const ShareImportPage({
     super.key,
     required this.auth,
-    required this.familyId,
     required this.fileName,
     required this.categories,
     this.text,
@@ -25,7 +24,6 @@ class ShareImportPage extends StatefulWidget {
   });
 
   final AuthStore auth;
-  final String familyId;
   final String fileName;
   final List<Category> categories;
   final String? text;
@@ -64,7 +62,6 @@ class _ShareImportPageState extends State<ShareImportPage> {
         throw ApiException('分享内容为空');
       }
       final data = await widget.auth.api.previewImportBytes(
-        widget.familyId,
         widget.fileName,
         bytes,
       );
@@ -91,7 +88,7 @@ class _ShareImportPageState extends State<ShareImportPage> {
     if (_rows.isEmpty) return;
     setState(() => _busy = true);
     try {
-      final summary = await widget.auth.api.confirmImport(widget.familyId, _rows);
+      final summary = await widget.auth.api.confirmImport(_rows);
       if (!mounted) return;
       final imported = summary['imported'] ?? 0;
       final dup = summary['duplicated'] ?? 0;
@@ -413,8 +410,7 @@ class ShareIntentHandler {
   Future<void> _handle(Map? raw) async {
     debugPrint('[share] 收到: $raw');
     if (raw == null) return;
-    final familyId = auth.currentFamily?.id ?? '';
-    if (familyId.isEmpty) return;
+    if (auth.currentFamily == null) return;
 
     final path = raw['path'] as String?;
     final text = raw['text'] as String?;
@@ -426,7 +422,6 @@ class ShareIntentHandler {
         if (bytes.isNotEmpty) {
           onReady(ShareImportPage(
             auth: auth,
-            familyId: familyId,
             fileName: path.split(Platform.pathSeparator).last,
             categories: categories,
             fileBytes: bytes,
@@ -439,7 +434,6 @@ class ShareIntentHandler {
     if (text != null && text.startsWith('__SHARE_ERROR__:')) {
       onReady(ShareImportPage(
         auth: auth,
-        familyId: familyId,
         fileName: 'share-error',
         categories: categories,
         text: text,
@@ -450,7 +444,6 @@ class ShareIntentHandler {
     if (text != null && text.trim().isNotEmpty) {
       onReady(ShareImportPage(
         auth: auth,
-        familyId: familyId,
         fileName: 'shared-text.csv',
         categories: categories,
         text: text,

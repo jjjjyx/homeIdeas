@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 
 	"family-ledger/server/internal/config"
@@ -36,6 +37,7 @@ type userResp struct {
 	Account         string `json:"account"`
 	Nickname        string `json:"nickname"`
 	AvatarURL       string `json:"avatar_url"`
+	Role            string `json:"role"`
 	IsPlatformAdmin bool   `json:"is_platform_admin"`
 }
 
@@ -64,19 +66,14 @@ type memberResp struct {
 	JoinedAt int64  `json:"joined_at"`
 }
 
-type inviteResp struct {
-	Code      string `json:"code"`
-	Role      string `json:"role"`
-	ExpiresAt *int64 `json:"expires_at"`
-}
-
-func toUserResp(u *domain.User) userResp {
+func toUserResp(u *domain.User, role string) userResp {
 	return userResp{
 		ID:              u.ID,
 		Account:         u.Account,
 		Nickname:        u.Nickname,
 		AvatarURL:       u.AvatarURL,
-		IsPlatformAdmin: u.IsPlatformAdmin,
+		Role:            role,
+		IsPlatformAdmin: role == domain.RoleOwner || role == domain.RoleAdmin,
 	}
 }
 
@@ -89,20 +86,21 @@ func toSessionResp(s *service.Session) sessionResp {
 			ID:              s.UserID,
 			Account:         s.Account,
 			Nickname:        s.Nickname,
+			Role:            s.Role,
 			IsPlatformAdmin: s.IsAdmin,
 		},
 	}
 }
 
-func toFamilyResp(c store.FamilyCard) familyResp {
+func toFamilyResp(f *domain.Family, myRole string, memberCount int) familyResp {
 	return familyResp{
-		ID:          c.ID,
-		Name:        c.Name,
-		OwnerID:     c.OwnerID,
-		MyRole:      c.Role,
-		MemberCount: c.MemberCount,
-		Rev:         c.Rev,
-		CreatedAt:   c.CreatedAt,
+		ID:          f.ID,
+		Name:        f.Name,
+		OwnerID:     f.OwnerID,
+		MyRole:      myRole,
+		MemberCount: memberCount,
+		Rev:         f.Rev,
+		CreatedAt:   f.CreatedAt,
 	}
 }
 
@@ -137,9 +135,11 @@ type registerReq struct {
 	Password   string `json:"password"`
 	Nickname   string `json:"nickname"`
 	InviteCode string `json:"invite_code"`
+	FamilyName string `json:"family_name"`
 	Device     string `json:"device"`
 }
 
+// register 只用于系统首次初始化：创建唯一家庭和户主账号。
 func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 	var req registerReq
 	if err := decodeJSON(w, r, &req); err != nil {
@@ -151,6 +151,7 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		Password:   req.Password,
 		Nickname:   req.Nickname,
 		InviteCode: req.InviteCode,
+		FamilyName: req.FamilyName,
 		Device:     req.Device,
 		IP:         clientIP(r),
 	})
@@ -217,6 +218,7 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 	writeMessage(w, r, "已退出登录")
 }
 
+// me 返回当前用户 + 唯一家庭。系统未初始化时 family 为 null。
 func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 	uid := userIDFrom(r.Context())
 	user, err := h.auth.UserByID(r.Context(), uid)
@@ -224,53 +226,30 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	families, err := h.families.List(r.Context(), uid)
+	detail, err := h.families.Detail(r.Context(), uid)
 	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrForbidden) {
+			writeData(w, r, map[string]any{"user": toUserResp(user, ""), "family": nil})
+			return
+		}
 		writeError(w, r, err)
 		return
 	}
-	cards := make([]familyResp, 0, len(families))
-	for _, c := range families {
-		cards = append(cards, toFamilyResp(c))
+	members := make([]memberResp, 0, len(detail.Members))
+	for _, m := range detail.Members {
+		members = append(members, toMemberResp(m))
 	}
-	writeData(w, r, map[string]any{"user": toUserResp(user), "families": cards})
+	writeData(w, r, map[string]any{
+		"user":    toUserResp(user, detail.MyRole),
+		"family":  toFamilyResp(detail.Family, detail.MyRole, len(detail.Members)),
+		"members": members,
+	})
 }
 
-// ---------- 家庭 ----------
-
-type createFamilyReq struct {
-	Name string `json:"name"`
-}
-
-func (h *Handler) createFamily(w http.ResponseWriter, r *http.Request) {
-	var req createFamilyReq
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeError(w, r, err)
-		return
-	}
-	card, err := h.families.Create(r.Context(), userIDFrom(r.Context()), req.Name, clientIP(r))
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
-	writeCreated(w, r, toFamilyResp(*card))
-}
-
-func (h *Handler) listFamilies(w http.ResponseWriter, r *http.Request) {
-	cards, err := h.families.List(r.Context(), userIDFrom(r.Context()))
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
-	out := make([]familyResp, 0, len(cards))
-	for _, c := range cards {
-		out = append(out, toFamilyResp(c))
-	}
-	writeData(w, r, map[string]any{"items": out})
-}
+// ---------- 家庭信息与成员 ----------
 
 func (h *Handler) getFamily(w http.ResponseWriter, r *http.Request) {
-	detail, err := h.families.Detail(r.Context(), userIDFrom(r.Context()), r.PathValue("id"))
+	detail, err := h.families.Detail(r.Context(), userIDFrom(r.Context()))
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -280,17 +259,36 @@ func (h *Handler) getFamily(w http.ResponseWriter, r *http.Request) {
 		members = append(members, toMemberResp(m))
 	}
 	writeData(w, r, map[string]any{
-		"family": familyResp{
-			ID:          detail.Family.ID,
-			Name:        detail.Family.Name,
-			OwnerID:     detail.Family.OwnerID,
-			MyRole:      detail.MyRole,
-			MemberCount: len(detail.Members),
-			Rev:         detail.Family.Rev,
-			CreatedAt:   detail.Family.CreatedAt,
-		},
+		"family":  toFamilyResp(detail.Family, detail.MyRole, len(detail.Members)),
 		"members": members,
 	})
+}
+
+type inviteResp struct {
+	Code      string `json:"code"`
+	Role      string `json:"role"`
+	ExpiresAt *int64 `json:"expires_at"`
+}
+
+type createInviteReq struct {
+	Role           string `json:"role"`
+	ExpiresInHours int    `json:"expires_in_hours"`
+}
+
+// createInvite 生成加入唯一家庭的邀请码（户主/管理员）。
+func (h *Handler) createInvite(w http.ResponseWriter, r *http.Request) {
+	var req createInviteReq
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	invite, err := h.families.CreateInvite(r.Context(), userIDFrom(r.Context()),
+		req.Role, req.ExpiresInHours, clientIP(r))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeCreated(w, r, inviteResp{Code: invite.Code, Role: invite.Role, ExpiresAt: invite.ExpiresAt})
 }
 
 type renameFamilyReq struct {
@@ -303,53 +301,15 @@ func (h *Handler) renameFamily(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	if err := h.families.Rename(r.Context(), userIDFrom(r.Context()), r.PathValue("id"), req.Name); err != nil {
+	if err := h.families.Rename(r.Context(), userIDFrom(r.Context()), req.Name); err != nil {
 		writeError(w, r, err)
 		return
 	}
 	writeMessage(w, r, "已修改")
 }
 
-type createInviteReq struct {
-	Role           string `json:"role"`
-	ExpiresInHours int    `json:"expires_in_hours"`
-}
-
-func (h *Handler) createInvite(w http.ResponseWriter, r *http.Request) {
-	var req createInviteReq
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeError(w, r, err)
-		return
-	}
-	invite, err := h.families.CreateInvite(r.Context(), userIDFrom(r.Context()),
-		r.PathValue("id"), req.Role, req.ExpiresInHours, clientIP(r))
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
-	writeCreated(w, r, inviteResp{Code: invite.Code, Role: invite.Role, ExpiresAt: invite.ExpiresAt})
-}
-
-type joinFamilyReq struct {
-	Code string `json:"code"`
-}
-
-func (h *Handler) joinFamily(w http.ResponseWriter, r *http.Request) {
-	var req joinFamilyReq
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeError(w, r, err)
-		return
-	}
-	card, err := h.families.Join(r.Context(), userIDFrom(r.Context()), req.Code, clientIP(r))
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
-	writeData(w, r, toFamilyResp(*card))
-}
-
 func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) {
-	members, err := h.families.Members(r.Context(), userIDFrom(r.Context()), r.PathValue("id"))
+	members, err := h.families.Members(r.Context(), userIDFrom(r.Context()))
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -359,6 +319,29 @@ func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) {
 		out = append(out, toMemberResp(m))
 	}
 	writeData(w, r, map[string]any{"items": out})
+}
+
+type addMemberReq struct {
+	Account  string `json:"account"`
+	Password string `json:"password"`
+	Nickname string `json:"nickname"`
+	Role     string `json:"role"`
+}
+
+// addMember 户主/管理员直接创建成员账号（单家庭模式不再需要邀请码）。
+func (h *Handler) addMember(w http.ResponseWriter, r *http.Request) {
+	var req addMemberReq
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	member, err := h.families.AddMember(r.Context(), userIDFrom(r.Context()),
+		req.Account, req.Password, req.Nickname, req.Role)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeCreated(w, r, toMemberResp(*member))
 }
 
 type setRoleReq struct {
@@ -372,7 +355,7 @@ func (h *Handler) setRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.families.SetRole(r.Context(), userIDFrom(r.Context()),
-		r.PathValue("id"), r.PathValue("uid"), req.Role); err != nil {
+		r.PathValue("uid"), req.Role); err != nil {
 		writeError(w, r, err)
 		return
 	}
@@ -381,17 +364,9 @@ func (h *Handler) setRole(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 	if err := h.families.RemoveMember(r.Context(), userIDFrom(r.Context()),
-		r.PathValue("id"), r.PathValue("uid")); err != nil {
+		r.PathValue("uid")); err != nil {
 		writeError(w, r, err)
 		return
 	}
 	writeMessage(w, r, "已移除成员")
-}
-
-func (h *Handler) leaveFamily(w http.ResponseWriter, r *http.Request) {
-	if err := h.families.Leave(r.Context(), userIDFrom(r.Context()), r.PathValue("id")); err != nil {
-		writeError(w, r, err)
-		return
-	}
-	writeMessage(w, r, "已退出家庭")
 }

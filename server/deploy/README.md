@@ -100,11 +100,12 @@ sudo systemctl start family-ledger
 
 ## 8. 首次使用
 
-1. 浏览器打开 `https://ledger.example.com/admin/`
-2. 第一个注册的账号会自动成为平台管理员——**先注册你自己的账号，再决定是否开放邀请注册**
-3. App 里用同一个账号登录，创建家庭，生成邀请码给家人
+1. 系统零用户时，第一个注册的账号会**自动创建唯一家庭并成为户主**（App 启动页 →「已有账号 / 用邀请码登录」→「用邀请码注册」，邀请码留空；或直接调 `POST /api/v1/auth/register`）。
+2. 户主用这个账号登录管理后台 `https://ledger.example.com/admin/`，可改家庭名、管理成员/设备。
+3. 其他家人：管理员在后台「家庭成员 → 邀请码」（或 App 设置 → 邀请成员）生成 6 位邀请码，家人在 App 用邀请码注册加入；
+   也可以继续用设备配对，批准后自动登录。
 
-> 因为 `ALLOW_PUBLIC_REGISTER=false`，除第一个账号外，其他人必须凭邀请码注册。
+> `ALLOW_PUBLIC_REGISTER=false` 时，除首次初始化外，其他人必须凭邀请码注册或由管理员直接创建账号。
 
 ## 本地 Windows 运行
 

@@ -8,7 +8,7 @@ import (
 
 // runClassify 触发一次 AI 分类
 func (h *Handler) runClassify(w http.ResponseWriter, r *http.Request) {
-	result, err := h.classify.Run(r.Context(), r.PathValue("id"), userIDFrom(r.Context()))
+	result, err := h.classify.Run(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()))
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -18,7 +18,7 @@ func (h *Handler) runClassify(w http.ResponseWriter, r *http.Request) {
 
 // classifyPending 待确认列表（按商户聚合）
 func (h *Handler) classifyPending(w http.ResponseWriter, r *http.Request) {
-	data, err := h.classify.Pending(r.Context(), r.PathValue("id"), userIDFrom(r.Context()),
+	data, err := h.classify.Pending(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()),
 		parseFloat(r.URL.Query().Get("min_confidence"), 0.7))
 	if err != nil {
 		writeError(w, r, err)
@@ -41,7 +41,7 @@ func (h *Handler) reviewTransaction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	err := h.classify.Review(r.Context(), r.PathValue("id"), userIDFrom(r.Context()),
+	err := h.classify.Review(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()),
 		r.PathValue("tid"), service.ReviewInput{
 			Scope: req.Scope, OwnerID: req.OwnerID, CategoryID: req.CategoryID, Remember: req.Remember,
 		})

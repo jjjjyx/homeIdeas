@@ -55,7 +55,7 @@ class SyncService {
                 })
             .toList();
 
-        final result = await api.syncPush(familyId, payload);
+        final result = await api.syncPush(payload);
         final results = (result['results'] as List<dynamic>? ?? []);
         final byOp = <String, Map<String, dynamic>>{};
         for (final item in results) {
@@ -90,7 +90,7 @@ class SyncService {
       // 2) 增量拉取
       var cursor = await db.getCursor(familyId);
       for (var round = 0; round < _maxPullRounds; round++) {
-        final data = await api.syncPull(familyId, cursor);
+        final data = await api.syncPull(cursor);
         final changes = data['changes'] as Map<String, dynamic>? ?? {};
 
         final categories = (changes['categories'] as List<dynamic>? ?? [])

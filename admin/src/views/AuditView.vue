@@ -3,15 +3,15 @@
     <div class="toolbar">
       <el-select v-model="action" placeholder="操作类型" clearable style="width: 220px" @change="reload">
         <el-option label="全部" value="" />
-        <el-option label="注册" value="auth.register" />
+        <el-option label="系统初始化" value="system.init" />
         <el-option label="登录" value="auth.login" />
         <el-option label="管理后台登录" value="admin.login" />
-        <el-option label="建房" value="family.create" />
-        <el-option label="邀请" value="family.invite" />
-        <el-option label="加入" value="family.join" />
+        <el-option label="添加成员" value="member.add" />
+        <el-option label="调整角色" value="member.set_role" />
         <el-option label="移除成员" value="member.remove" />
+        <el-option label="修改家庭名" value="family.rename" />
         <el-option label="删账" value="transaction.delete" />
-        <el-option label="封禁用户" value="admin.user.disable" />
+        <el-option label="封禁成员" value="admin.user.disable" />
       </el-select>
     </div>
 

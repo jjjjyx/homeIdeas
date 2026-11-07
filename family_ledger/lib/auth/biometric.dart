@@ -36,7 +36,7 @@ class BiometricGuard {
   }
 
   /// 弹系统生物识别，成功返回 true
-  static Future<bool> authenticate({String reason = '解锁家庭记账本'}) async {
+  static Future<bool> authenticate({String reason = '验证指纹以进入家庭记账本'}) async {
     try {
       return await _auth.authenticate(
         localizedReason: reason,
@@ -101,7 +101,7 @@ class _LockPageState extends State<LockPage> {
               const Text('家庭记账本',
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
               const SizedBox(height: 6),
-              Text('用指纹或面容解锁',
+              Text('验证指纹以查看账目',
                   style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
               const SizedBox(height: 28),
               SizedBox(

@@ -78,6 +78,11 @@ func (s *DeviceService) StartDevice(ctx context.Context, in StartDeviceInput) (*
 		}
 	}
 
+	// 已授权的设备是永久记住的，下一步直接走 device/login 即可，不需要重新配对
+	if known, err := s.db.DeviceByKey(ctx, s.db.SQL(), in.DeviceKey); err == nil && known != nil {
+		return nil, domain.New(4102, 409, "这台设备已授权，直接登录即可")
+	}
+
 	code, err := randomDigits(6)
 	if err != nil {
 		return nil, err
@@ -101,7 +106,13 @@ func (s *DeviceService) StartDevice(ctx context.Context, in StartDeviceInput) (*
 		CreatedAt:  now,
 		ExpiresAt:  now + devicePairTTL.Milliseconds(),
 	}
-	if err := s.db.CreateDevice(ctx, s.db.SQL(), dev, hex.EncodeToString(sum[:])); err != nil {
+	if existing, err := s.db.DeviceByKeyAny(ctx, s.db.SQL(), dev.DeviceKey); err == nil && existing != nil {
+		if err := s.db.RefreshPendingDevice(ctx, s.db.SQL(), existing.ID, code,
+			hex.EncodeToString(sum[:]), dev.Model, dev.OSVersion, dev.AppVersion, dev.IP,
+			dev.ExpiresAt, now); err != nil {
+			return nil, err
+		}
+	} else if err := s.db.CreateDevice(ctx, s.db.SQL(), dev, hex.EncodeToString(sum[:])); err != nil {
 		return nil, err
 	}
 	return &StartDeviceResult{
@@ -187,11 +198,13 @@ func (s *DeviceService) issueForDevice(ctx context.Context, user *domain.User, d
 	if err := s.db.CreateRefreshToken(ctx, s.db.SQL(), token); err != nil {
 		return nil, err
 	}
+	role := s.auth.roleOf(ctx, user.ID)
 	return &Session{
 		UserID:       user.ID,
 		Account:      user.Account,
 		Nickname:     user.Nickname,
-		IsAdmin:      user.IsPlatformAdmin,
+		Role:         role,
+		IsAdmin:      role == domain.RoleOwner || role == domain.RoleAdmin,
 		AccessToken:  access,
 		ExpiresIn:    int64(s.cfg.AccessTTL.Seconds()),
 		RefreshToken: refreshPlain,
@@ -206,28 +219,30 @@ type ApproveInput struct {
 	NewNickname string
 	NewPassword string
 
-	FamilyID string
-	Role     string
+	Role string
 }
 
 type ApproveResult struct {
 	DeviceID string `json:"device_id"`
 	UserID   string `json:"user_id"`
 	Account  string `json:"account"`
+	Role     string `json:"role"`
 	// 新建用户时返回自动生成的密码，供管理员转告本人（也可之后重置）
 	GeneratedPassword string `json:"generated_password,omitempty"`
 	// 被本次批准顶掉的旧设备记录（同一台手机的历史绑定）
 	Superseded []string `json:"superseded,omitempty"`
 }
 
-// Approve 管理员批准配对：绑定已有用户或新建用户
+// Approve 管理员批准配对：绑定已有用户或新建用户。
+// 单家庭模式：批准即加入系统唯一的家庭，不再选择家庭。
 func (s *DeviceService) Approve(ctx context.Context, adminUserID, deviceID string, in ApproveInput) (*ApproveResult, error) {
-	admin, err := s.db.UserByID(ctx, s.db.SQL(), adminUserID)
-	if err != nil {
+	if err := s.requireAdmin(ctx, adminUserID); err != nil {
 		return nil, err
 	}
-	if !admin.IsPlatformAdmin {
-		return nil, domain.ErrForbidden.WithMessage("只有平台管理员可以在后台批准设备")
+
+	familyID, err := s.db.PrimaryFamilyID(ctx, s.db.SQL())
+	if err != nil {
+		return nil, domain.ErrForbidden.WithMessage("系统还没有初始化家庭，请先完成初始化")
 	}
 
 	dev, err := s.db.DeviceByID(ctx, s.db.SQL(), deviceID)
@@ -236,6 +251,11 @@ func (s *DeviceService) Approve(ctx context.Context, adminUserID, deviceID strin
 	}
 	if dev.Status != domain.DevicePending {
 		return nil, domain.ErrBadRequest.WithMessage("这条配对请求已经处理过了")
+	}
+
+	role := strings.TrimSpace(in.Role)
+	if role != domain.RoleAdmin && role != domain.RoleMember {
+		role = domain.RoleMember
 	}
 
 	now := s.nowFn()
@@ -271,27 +291,29 @@ func (s *DeviceService) Approve(ctx context.Context, adminUserID, deviceID strin
 			}
 			userID = u.ID
 			result.Account = u.Account
+			if err := s.db.AddMember(ctx, tx, familyID, userID, role, now); err != nil {
+				return err
+			}
 		} else {
 			u, err := s.db.UserByID(ctx, tx, userID)
 			if err != nil {
 				return domain.ErrBadRequest.WithMessage("用户不存在")
 			}
 			result.Account = u.Account
-		}
-		result.UserID = userID
-
-		// 加入家庭（已在里面就跳过）
-		if in.FamilyID != "" {
-			role := strings.TrimSpace(in.Role)
-			if role != domain.RoleOwner && role != domain.RoleAdmin && role != domain.RoleMember {
-				role = domain.RoleMember
-			}
-			if err := s.db.AddMemberIfAbsent(ctx, tx, in.FamilyID, userID, role, now); err != nil {
+			// 已经在家庭里就沿用原角色，避免配对时误改权限
+			if m, err := s.db.MemberOf(ctx, tx, familyID, userID); err == nil {
+				role = m.Role
+			} else if err := s.db.AddMember(ctx, tx, familyID, userID, role, now); err != nil {
 				return err
 			}
 		}
+		result.UserID = userID
+		result.Role = role
 
-		if err := s.db.ApproveDevice(ctx, tx, deviceID, userID, in.FamilyID, in.Role, adminUserID, now); err != nil {
+		if _, err := s.db.BumpRev(ctx, tx, familyID, now); err != nil {
+			return err
+		}
+		if err := s.db.ApproveDevice(ctx, tx, deviceID, userID, role, adminUserID, now); err != nil {
 			return err
 		}
 		// 同一台手机之前批准过？让旧记录失效，避免一台设备多条授权
@@ -343,12 +365,9 @@ func (s *DeviceService) List(ctx context.Context, adminUserID string, includeExp
 }
 
 func (s *DeviceService) requireAdmin(ctx context.Context, userID string) error {
-	u, err := s.db.UserByID(ctx, s.db.SQL(), userID)
-	if err != nil {
-		return err
-	}
-	if !u.IsPlatformAdmin {
-		return domain.ErrForbidden.WithMessage("只有平台管理员可以操作")
+	role := s.auth.roleOf(ctx, userID)
+	if role != domain.RoleOwner && role != domain.RoleAdmin {
+		return domain.ErrForbidden.WithMessage("只有家庭管理员可以操作")
 	}
 	return nil
 }
@@ -395,7 +414,6 @@ type PendingItem struct {
 	LastUserID     string `json:"last_user_id,omitempty"`
 	LastAccount    string `json:"last_account,omitempty"`
 	LastNickname   string `json:"last_nickname,omitempty"`
-	LastFamilyID   string `json:"last_family_id,omitempty"`
 	LastRole       string `json:"last_role,omitempty"`
 	LastApprovedAt *int64 `json:"last_approved_at,omitempty"`
 }
@@ -413,7 +431,6 @@ func (s *DeviceService) PendingWithHistory(ctx context.Context, adminUserID stri
 			if prev, err := s.db.LastApprovedByKey(ctx, s.db.SQL(), d.DeviceKey, d.ID); err == nil && prev != nil {
 				item.LastDeviceID = prev.ID
 				item.LastUserID = prev.UserID
-				item.LastFamilyID = prev.FamilyID
 				item.LastRole = prev.Role
 				if prev.ApprovedAt != nil {
 					item.LastApprovedAt = prev.ApprovedAt
@@ -427,4 +444,61 @@ func (s *DeviceService) PendingWithHistory(ctx context.Context, adminUserID stri
 		out = append(out, item)
 	}
 	return out, nil
+}
+
+// LoginByDevice 用「永久记住的设备标识」直接登录。
+//
+// 授权是永久的：只要这台设备带回来的 device_key 曾经被批准过，
+// 清缓存、重装、换令牌都不用再等家人批准。
+func (s *DeviceService) LoginByDevice(ctx context.Context, deviceKey, ip string) (*Session, error) {
+	dev, err := s.db.DeviceByKey(ctx, s.db.SQL(), deviceKey)
+	if err != nil || dev == nil {
+		return nil, domain.New(4101, 401, "这台设备还没被授权，需要家人批准一次")
+	}
+	user, err := s.db.UserByID(ctx, s.db.SQL(), dev.UserID)
+	if err != nil {
+		return nil, domain.ErrUnauthorized
+	}
+	if user.Status != 1 {
+		return nil, domain.ErrUserDisabled
+	}
+
+	now := s.nowFn()
+	_ = s.db.RevokeByDevice(ctx, s.db.SQL(), dev.ID, now)
+	session, err := s.issueForDevice(ctx, user, dev, now)
+	if err != nil {
+		return nil, err
+	}
+	s.db.TouchDevice(ctx, s.db.SQL(), dev.ID, now)
+	if ip != "" && ip != dev.IP {
+		_, _ = s.db.SQL().ExecContext(ctx, `UPDATE devices SET ip = ? WHERE id = ?`, truncate(ip, 64), dev.ID)
+	}
+	return session, nil
+}
+
+// MemberDevices 管理后台查看某个成员名下的设备
+func (s *DeviceService) MemberDevices(ctx context.Context, adminUserID, memberID string) ([]domain.Device, error) {
+	if err := s.requireAdmin(ctx, adminUserID); err != nil {
+		return nil, err
+	}
+	return s.db.DevicesOfMember(ctx, s.db.SQL(), memberID)
+}
+
+// UnbindDevice 解绑：删掉设备记录并作废它的刷新令牌
+func (s *DeviceService) UnbindDevice(ctx context.Context, adminUserID, memberID, deviceID string) error {
+	if err := s.requireAdmin(ctx, adminUserID); err != nil {
+		return err
+	}
+	dev, err := s.db.DeviceByID(ctx, s.db.SQL(), deviceID)
+	if err != nil {
+		return err
+	}
+	if dev.UserID != memberID {
+		return domain.ErrNotFound.WithMessage("这台设备不属于该成员")
+	}
+	now := s.nowFn()
+	if err := s.db.RevokeByDevice(ctx, s.db.SQL(), deviceID, now); err != nil {
+		return err
+	}
+	return s.db.DeleteDevice(ctx, s.db.SQL(), deviceID)
 }

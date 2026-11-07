@@ -121,9 +121,7 @@ class _SplitPageState extends State<SplitPage> {
 
     setState(() => _saving = true);
     try {
-      final familyId = widget.store.familyId;
       await widget.store.api.splitTransaction(
-        familyId,
         widget.entry.id,
         _lines
             .map((l) => <String, dynamic>{

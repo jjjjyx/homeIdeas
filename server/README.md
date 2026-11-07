@@ -1,17 +1,20 @@
-# server · 家庭记账本后端
+# server · 家庭记账本后端（单家庭）
 
 Go 1.27 + SQLite（modernc，纯 Go 无 CGO）实现，单二进制部署。
+
+> 一个部署只服务一个家庭。没有家庭列表/创建/加入/切换；成员通过**邀请码注册**
+> 或由户主/管理员在后台直接创建加入。数据接口不再带 `family_id`。
 
 ## 目录
 
 ```
 cmd/api/            启动入口（配置 → 迁移 → 路由 → 优雅退出）
 cmd/backup/         SQLite 在线备份工具（VACUUM INTO + 保留份数）
-cmd/devdump/        开发期小工具：直接看库里的用户/家庭/邀请码
+cmd/devdump/        开发期小工具：直接看库里的家庭/成员/账目统计
 internal/config/    环境变量配置
 internal/domain/    实体、枚举、错误码
 internal/store/     SQLite 访问层 + 迁移（embed，启动自动执行）
-internal/service/   业务逻辑（认证、家庭、账本、同步、统计、导出、管理）
+internal/service/   业务逻辑（认证、家庭、邀请码、账本、同步、统计、导出、管理）
 internal/httpapi/   路由、中间件、DTO、静态资源
 internal/backup/    备份逻辑
 internal/importer/  账单文件解析（微信/支付宝/云闪付/银行，GBK + 加密 zip）
@@ -62,7 +65,7 @@ go build -trimpath -ldflags "-s -w" -o bin/ledger-server.exe ./cmd/api
 | `JWT_SECRET` | 开发默认值 | **生产必须改**，至少 16 位 |
 | `ACCESS_TTL_MINUTES` | `15` | access token 有效期 |
 | `REFRESH_TTL_HOURS` | `720` | refresh token 有效期 |
-| `ALLOW_PUBLIC_REGISTER` | `false` | 是否允许无邀请码注册 |
+| `ALLOW_PUBLIC_REGISTER` | `false` | 是否允许无邀请码注册（正常关闭：成员必须凭邀请码或后台创建） |
 | `CORS_ORIGINS` | `*` | 逗号分隔；生产建议填管理后台域名 |
 | `DATA_KEY` | 同 `JWT_SECRET` | 加密邮箱密码/解压码的主密钥，**换掉会导致已存密文失效** |
 | `MAIL_POLL_MINUTES` | `15` | 账单邮箱轮询间隔，0 表示关闭定时拉取 |
@@ -70,17 +73,19 @@ go build -trimpath -ldflags "-s -w" -o bin/ledger-server.exe ./cmd/api
 ## 测试
 
 ```powershell
-# 单元测试（权限、邀请码、跨家庭越权、私密账、同步游标、冲突、墓碑）
+# 单元测试（认证/邀请码/成员权限/私密账/同步游标/冲突/墓碑/导入）
 go test ./...
 
 # 端到端：自带临时服务实例（临时库 + 随机端口），跑完自动清理，可重复执行
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke.ps1
 
-# 打到已经在跑的服务（注意：该库必须是空的，否则首个用户不是引导账号）
+# 打到已经在跑的服务（注意：该库必须是空的，否则不是首次初始化）
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke.ps1 -BaseUrl http://127.0.0.1:8088
 ```
 
-冒烟脚本覆盖 30 项：注册/登录/刷新/登出、建房、邀请、加入、角色、越权、邀请码复用、错误密码等。
+冒烟脚本覆盖 **87 项**：首次初始化、邀请码注册/复用、成员与角色、改名、令牌刷新/登出、
+同步拉取/推送/冲突/墓碑、统计、私密账、CSV 导出、后台登录/概览/成员/账目/审计/封禁、
+设备配对批准等。
 
 > 注意：脚本用 Windows PowerShell 5.1 编写，已显式按 UTF-8 发送请求体；
 > 文件需保留 UTF-8 BOM，否则 5.1 会把中文按 ANSI 解析导致语法错误。
@@ -88,13 +93,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke.ps1 -BaseUrl
 ## 已完成
 
 - **M0**：配置、结构化日志、SQLite 连接（WAL + 单连接）、嵌入式迁移、健康检查、优雅退出、CORS、请求 ID、panic 恢复
-- **M1**：注册（首用户引导 + 邀请码）、登录、刷新、登出、家庭 CRUD、邀请码（一次性、可设角色与有效期）、成员列表/改角色/移除/退出、RBAC + 数据域校验、审计日志、默认分类与账户种子
+- **M1**：首次初始化（创建唯一家庭+户主）、注册/登录/刷新/登出、**邀请码注册加入**、成员列表/改角色/移除、RBAC、审计日志、默认分类与账户种子
 - **M2**：账目增删改查（软删墓碑）、`/sync` 增量拉取（rev 游标）、`/sync/push` 批量推送（applied/conflict/rejected）、月度汇总 / 分类占比 / 趋势统计
-- **M3**：管理后台 API（`/admin/api`，独立 `scope=admin` 令牌）、平台概览、用户封禁/解禁（同步吊销 refresh token）、家庭与账目查询、审计日志；Vue 前端构建产物通过 `webassets` embed 进二进制
+- **M3**：管理后台 API（`/admin/api`，独立 `scope=admin` 令牌）、单家庭概览、成员管理（添加/改角色/封禁/重置密码/移除）、邀请码、账目查询、审计日志、设备授权；Vue 前端构建产物通过 `webassets` embed 进二进制
 - **M5（部分）**：CSV 导出（带 BOM、私密账过滤）、`VACUUM INTO` 在线备份工具（`bin/ledger-backup`）、systemd + Caddy + 备份脚本（`deploy/`）
 - **账单导入**：微信/支付宝/云闪付/银行 CSV 解析（GBK、表头定位、不计收支排除、加密 zip）、`(family, external_id)` 去重、商户名→分类规则；IMAP 邮箱自动拉取 + 解压码补填重试
 
-测试规模：`go test ./...` **24 个用例**，`scripts/smoke.ps1` **83 项**端到端检查（脚本自带临时服务实例，可重复执行）。
+测试规模：`go test ./...`（认证/邀请码/权限/同步/导入等），`scripts/smoke.ps1` **87 项**端到端检查（脚本自带临时服务实例，可重复执行）。
 
 ## 发布
 
@@ -111,9 +116,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke.ps1 -BaseUrl
 ## 设计要点
 
 1. **单连接 + WAL**：家庭规模下以简单正确优先，彻底避开 `SQLITE_BUSY`；将来要提并发改成读写双池即可。
-2. **数据域校验收口在 service 层**：`mustMember()` 是唯一入口，跨家庭一律 403，不暴露资源是否存在。
+2. **数据域校验收口在 service 层**：`mustMember()` 是唯一入口；不是唯一家庭成员一律 403，不暴露资源是否存在。
 3. **邀请码先核销再加入**：`UPDATE ... WHERE used_by IS NULL` 是原子条件更新，并发下只有一个请求成功。
-   初版曾把未使用写成空串导致条件永远不命中、邀请码可无限复用，已修复并有回归测试。
+   邀请码绑定唯一家庭，`family_id` 不匹配的码会被拒绝。
 4. **时间戳统一 Unix 毫秒**，金额统一「分」，与 App 端一致。
 5. **rev 递增**：家庭级同步版本号，M2 的增量同步游标。
 
@@ -139,5 +144,6 @@ go run ./cmd/loadtest -writers 8 -batches 40 -batch 5 -readers 4
 
 ## 下一步
 
-- **M4**：Flutter App 接入（登录、家庭、本地缓存、Outbox、同步状态）
-- **M5**：部署（systemd + Caddy）、`VACUUM INTO` 定时备份、CSV 导出、压测
+- **M4**：Flutter App 已接入设备配对、邀请码注册/登录、本地缓存、Outbox、同步状态
+- **M5**：部署（systemd + Caddy）、`VACUUM INTO` 定时备份、CSV 导出、压测均已具备
+- **单家庭 v2**：可继续做户主转让、分类/账户编辑界面、预算提醒

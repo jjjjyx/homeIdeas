@@ -296,7 +296,6 @@ class _PendingClassifyBanner extends StatelessWidget {
             MaterialPageRoute<void>(
               builder: (_) => ClassifyReviewPage(
                 api: store.api,
-                familyId: store.familyId,
                 categories: store.categories,
               ),
             ),

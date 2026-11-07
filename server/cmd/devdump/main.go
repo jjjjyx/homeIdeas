@@ -21,23 +21,8 @@ func main() {
 	}
 	defer db.Close()
 
-	fmt.Println("== users ==")
-	rows, err := db.Query(`SELECT account, nickname, status, is_platform_admin FROM users ORDER BY created_at`)
-	if err != nil {
-		log.Fatal(err)
-	}
-	for rows.Next() {
-		var account, nickname string
-		var status, admin int
-		if err := rows.Scan(&account, &nickname, &status, &admin); err != nil {
-			log.Fatal(err)
-		}
-		fmt.Printf("  %-14s %-8s status=%d admin=%d\n", account, nickname, status, admin)
-	}
-	rows.Close()
-
-	fmt.Println("== families ==")
-	rows, err = db.Query(`SELECT id, name, rev FROM families`)
+	fmt.Println("== family ==")
+	rows, err := db.Query(`SELECT id, name, rev FROM families WHERE deleted_at IS NULL ORDER BY created_at LIMIT 1`)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -51,17 +36,21 @@ func main() {
 	}
 	rows.Close()
 
-	fmt.Println("== invites ==")
-	rows, err = db.Query(`SELECT code, role, COALESCE(used_by,'-') FROM invites ORDER BY created_at DESC LIMIT 5`)
+	fmt.Println("== members ==")
+	rows, err = db.Query(`
+		SELECT u.account, u.nickname, u.status, m.role
+		FROM users u LEFT JOIN family_members m ON m.user_id = u.id
+		ORDER BY u.created_at`)
 	if err != nil {
 		log.Fatal(err)
 	}
 	for rows.Next() {
-		var code, role, usedBy string
-		if err := rows.Scan(&code, &role, &usedBy); err != nil {
+		var account, nickname, role string
+		var status int
+		if err := rows.Scan(&account, &nickname, &status, &role); err != nil {
 			log.Fatal(err)
 		}
-		fmt.Printf("  %s %-7s used_by=%s\n", code, role, usedBy)
+		fmt.Printf("  %-14s %-8s status=%d role=%s\n", account, nickname, status, role)
 	}
 	rows.Close()
 

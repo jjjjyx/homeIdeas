@@ -13,7 +13,6 @@ class TokenStore {
   static const _kUserId = 'auth.user_id';
   static const _kNickname = 'auth.nickname';
   static const _kAccount = 'auth.account';
-  static const _kFamilyId = 'auth.family_id';
   static const _kServer = 'app.server_url';
 
   static Future<TokenStore> load() async =>
@@ -24,7 +23,6 @@ class TokenStore {
   String? get userId => _prefs.getString(_kUserId);
   String? get nickname => _prefs.getString(_kNickname);
   String? get account => _prefs.getString(_kAccount);
-  String? get familyId => _prefs.getString(_kFamilyId);
 
   /// 用户自定义的服务器地址（空表示用默认值）
   String? get serverUrl => _prefs.getString(_kServer);
@@ -70,14 +68,11 @@ class TokenStore {
     await _prefs.setString(_kAccount, account);
   }
 
-  Future<void> saveFamily(String id) => _prefs.setString(_kFamilyId, id);
-
   Future<void> clear() async {
     await _prefs.remove(_kAccess);
     await _prefs.remove(_kRefresh);
     await _prefs.remove(_kUserId);
     await _prefs.remove(_kNickname);
     await _prefs.remove(_kAccount);
-    await _prefs.remove(_kFamilyId);
   }
 }

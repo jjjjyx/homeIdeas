@@ -11,7 +11,7 @@ func (h *Handler) exportCSV(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	data, err := h.ledger.ExportCSV(
 		r.Context(),
-		r.PathValue("id"),
+		familyIDFrom(r.Context()),
 		userIDFrom(r.Context()),
 		parseMS(q.Get("from")),
 		parseMS(q.Get("to")),

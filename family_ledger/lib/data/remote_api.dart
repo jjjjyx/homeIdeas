@@ -183,53 +183,25 @@ class RemoteApi {
     }
   }
 
-  Future<(AppUser, List<Family>)> me() async {
+  /// 单家庭系统：返回当前用户和唯一的家庭（尚未初始化时 family 为 null）。
+  Future<(AppUser, Family?)> me() async {
     try {
       final resp = await _dio.get('/api/v1/me');
       final data = _unwrap(resp);
       final user = AppUser.fromJson(data['user'] as Map<String, dynamic>);
-      final families = (data['families'] as List<dynamic>)
-          .map((e) => Family.fromJson(e as Map<String, dynamic>))
-          .toList();
-      return (user, families);
+      final rawFamily = data['family'];
+      final family = rawFamily is Map<String, dynamic>
+          ? Family.fromJson(rawFamily)
+          : null;
+      return (user, family);
     } on DioException catch (e) {
       _throwDio(e);
     }
   }
 
-  Future<List<Family>> families() async {
+  Future<List<MemberInfo>> members() async {
     try {
-      final resp = await _dio.get('/api/v1/families');
-      final data = _unwrap(resp);
-      return (data['items'] as List<dynamic>)
-          .map((e) => Family.fromJson(e as Map<String, dynamic>))
-          .toList();
-    } on DioException catch (e) {
-      _throwDio(e);
-    }
-  }
-
-  Future<Family> createFamily(String name) async {
-    try {
-      final resp = await _dio.post('/api/v1/families', data: {'name': name});
-      return Family.fromJson(_unwrap(resp) as Map<String, dynamic>);
-    } on DioException catch (e) {
-      _throwDio(e);
-    }
-  }
-
-  Future<Family> joinFamily(String code) async {
-    try {
-      final resp = await _dio.post('/api/v1/families/join', data: {'code': code});
-      return Family.fromJson(_unwrap(resp) as Map<String, dynamic>);
-    } on DioException catch (e) {
-      _throwDio(e);
-    }
-  }
-
-  Future<List<MemberInfo>> members(String familyId) async {
-    try {
-      final resp = await _dio.get('/api/v1/families/$familyId/members');
+      final resp = await _dio.get('/api/v1/family/members');
       final data = _unwrap(resp);
       return (data['items'] as List<dynamic>)
           .map((e) => MemberInfo.fromJson(e as Map<String, dynamic>))
@@ -239,12 +211,12 @@ class RemoteApi {
     }
   }
 
-  /// 生成邀请码（户主/管理员）
-  Future<String> createInvite(String familyId) async {
+  /// 生成加入唯一家庭的邀请码（户主/管理员）。
+  Future<String> createInvite({String role = 'member'}) async {
     try {
       final resp = await _dio.post(
-        '/api/v1/families/$familyId/invites',
-        data: {'role': 'member', 'expires_in_hours': 72},
+        '/api/v1/family/invites',
+        data: {'role': role, 'expires_in_hours': 72},
       );
       return _unwrap(resp)['code'] as String;
     } on DioException catch (e) {
@@ -252,10 +224,10 @@ class RemoteApi {
     }
   }
 
-  Future<Map<String, dynamic>> syncPull(String familyId, int since, {int limit = 500}) async {
+  Future<Map<String, dynamic>> syncPull(int since, {int limit = 500}) async {
     try {
       final resp = await _dio.get(
-        '/api/v1/families/$familyId/sync',
+        '/api/v1/sync',
         queryParameters: {'since': since, 'limit': limit},
       );
       return _unwrap(resp) as Map<String, dynamic>;
@@ -264,15 +236,9 @@ class RemoteApi {
     }
   }
 
-  Future<Map<String, dynamic>> syncPush(
-    String familyId,
-    List<Map<String, dynamic>> ops,
-  ) async {
+  Future<Map<String, dynamic>> syncPush(List<Map<String, dynamic>> ops) async {
     try {
-      final resp = await _dio.post(
-        '/api/v1/families/$familyId/sync/push',
-        data: {'ops': ops},
-      );
+      final resp = await _dio.post('/api/v1/sync/push', data: {'ops': ops});
       return _unwrap(resp) as Map<String, dynamic>;
     } on DioException catch (e) {
       _throwDio(e);
@@ -280,17 +246,16 @@ class RemoteApi {
   }
 // ---------- 账单邮箱 ----------
 
-  Future<Map<String, dynamic>> mailStatus(String familyId) async {
+  Future<Map<String, dynamic>> mailStatus() async {
     try {
-      final resp = await _dio.get('/api/v1/families/$familyId/mail');
+      final resp = await _dio.get('/api/v1/mail');
       return _unwrap(resp) as Map<String, dynamic>;
     } on DioException catch (e) {
       _throwDio(e);
     }
   }
 
-  Future<void> saveMailConfig(
-    String familyId, {
+  Future<void> saveMailConfig({
     required String host,
     required int port,
     required String username,
@@ -301,7 +266,7 @@ class RemoteApi {
     bool resetCursor = false,
   }) async {
     try {
-      await _dio.put('/api/v1/families/$familyId/mail', data: {
+      await _dio.put('/api/v1/mail', data: {
         'host': host,
         'port': port,
         'username': username,
@@ -316,8 +281,7 @@ class RemoteApi {
     }
   }
 
-  Future<void> testMailConfig(
-    String familyId, {
+  Future<void> testMailConfig({
     required String host,
     required int port,
     required String username,
@@ -325,7 +289,7 @@ class RemoteApi {
     bool useTls = true,
   }) async {
     try {
-      await _dio.post('/api/v1/families/$familyId/mail/test', data: {
+      await _dio.post('/api/v1/mail/test', data: {
         'host': host,
         'port': port,
         'username': username,
@@ -337,9 +301,9 @@ class RemoteApi {
     }
   }
 
-  Future<Map<String, dynamic>> syncMail(String familyId) async {
+  Future<Map<String, dynamic>> syncMail() async {
     try {
-      final resp = await _dio.post('/api/v1/families/$familyId/mail/sync');
+      final resp = await _dio.post('/api/v1/mail/sync');
       return _unwrap(resp) as Map<String, dynamic>;
     } on DioException catch (e) {
       _throwDio(e);
@@ -348,12 +312,11 @@ class RemoteApi {
 
   /// 提交解压码。带 messageId 只重试这一封（每份账单密码都不同）。
   Future<Map<String, dynamic>> submitMailPassword(
-    String familyId,
     String password, {
     String messageId = '',
   }) async {
     try {
-      final resp = await _dio.post('/api/v1/families/$familyId/mail/password', data: {
+      final resp = await _dio.post('/api/v1/mail/password', data: {
         'message_id': messageId,
         'password': password,
       });
@@ -364,10 +327,10 @@ class RemoteApi {
   }
 // ---------- AI 分类 / 人工确认 ----------
 
-  Future<Map<String, dynamic>> classifyPending(String familyId, {double minConfidence = 0.7}) async {
+  Future<Map<String, dynamic>> classifyPending({double minConfidence = 0.7}) async {
     try {
       final resp = await _dio.get(
-        '/api/v1/families/$familyId/classify/pending',
+        '/api/v1/classify/pending',
         queryParameters: <String, dynamic>{'min_confidence': minConfidence},
       );
       return _unwrap(resp) as Map<String, dynamic>;
@@ -376,9 +339,9 @@ class RemoteApi {
     }
   }
 
-  Future<Map<String, dynamic>> runClassify(String familyId) async {
+  Future<Map<String, dynamic>> runClassify() async {
     try {
-      final resp = await _dio.post('/api/v1/families/$familyId/classify');
+      final resp = await _dio.post('/api/v1/classify');
       return _unwrap(resp) as Map<String, dynamic>;
     } on DioException catch (e) {
       _throwDio(e);
@@ -387,7 +350,6 @@ class RemoteApi {
 
   /// 人工确认一条账目：家庭/个人 + 分类，可选「记住这个商户」
   Future<void> reviewTransaction(
-    String familyId,
     String txId, {
     required String scope,
     String ownerId = '',
@@ -395,7 +357,7 @@ class RemoteApi {
     bool remember = true,
   }) async {
     try {
-      await _dio.post('/api/v1/families/$familyId/transactions/$txId/review', data: <String, dynamic>{
+      await _dio.post('/api/v1/transactions/$txId/review', data: <String, dynamic>{
         'scope': scope,
         'owner_id': ownerId,
         'category_id': categoryId,
@@ -409,13 +371,12 @@ class RemoteApi {
 
   /// 把一笔账目拆成多行。lines 里每行：mid 无意义，用 map。
   Future<int> splitTransaction(
-    String familyId,
     String txId,
     List<Map<String, dynamic>> lines,
   ) async {
     try {
       final resp = await _dio.post(
-        '/api/v1/families/$familyId/transactions/$txId/split',
+        '/api/v1/transactions/$txId/split',
         data: <String, dynamic>{'lines': lines},
       );
       final data = _unwrap(resp) as Map<String, dynamic>;
@@ -425,27 +386,27 @@ class RemoteApi {
     }
   }
 
-  Future<void> undoSplit(String familyId, String txId) async {
+  Future<void> undoSplit(String txId) async {
     try {
-      await _dio.post('/api/v1/families/$familyId/transactions/$txId/unsplit');
+      await _dio.post('/api/v1/transactions/$txId/unsplit');
     } on DioException catch (e) {
       _throwDio(e);
     }
   }
 
-  Future<List<Map<String, dynamic>>> splitChildren(String familyId, String txId) async {
+  Future<List<Map<String, dynamic>>> splitChildren(String txId) async {
     try {
-      final resp = await _dio.get('/api/v1/families/$familyId/transactions/$txId/children');
+      final resp = await _dio.get('/api/v1/transactions/$txId/children');
       final data = _unwrap(resp) as Map<String, dynamic>;
       return (data['items'] as List<dynamic>? ?? <dynamic>[]).cast<Map<String, dynamic>>();
     } on DioException catch (e) {
       _throwDio(e);
     }
   }
-Future<Map<String, dynamic>> scopeBreakdown(String familyId, {required String month}) async {
+Future<Map<String, dynamic>> scopeBreakdown({required String month}) async {
     try {
       final resp = await _dio.get(
-        '/api/v1/families/$familyId/stats/scopes',
+        '/api/v1/stats/scopes',
         queryParameters: <String, dynamic>{'month': month},
       );
       return _unwrap(resp) as Map<String, dynamic>;
@@ -457,7 +418,6 @@ Future<Map<String, dynamic>> scopeBreakdown(String familyId, {required String mo
 
   /// 上传 CSV 做预览，不入库
   Future<Map<String, dynamic>> previewImportBytes(
-    String familyId,
     String fileName,
     List<int> bytes,
   ) async {
@@ -466,7 +426,7 @@ Future<Map<String, dynamic>> scopeBreakdown(String familyId, {required String mo
         'file': MultipartFile.fromBytes(bytes, filename: fileName),
       });
       final resp = await _dio.post(
-        '/api/v1/families/$familyId/imports/preview',
+        '/api/v1/imports/preview',
         data: form,
         options: Options(contentType: 'multipart/form-data'),
       );
@@ -478,12 +438,11 @@ Future<Map<String, dynamic>> scopeBreakdown(String familyId, {required String mo
 
   /// 确认导入预览过的记录
   Future<Map<String, dynamic>> confirmImport(
-    String familyId,
     List<Map<String, dynamic>> rows,
   ) async {
     try {
       final resp = await _dio.post(
-        '/api/v1/families/$familyId/imports/confirm',
+        '/api/v1/imports/confirm',
         data: <String, dynamic>{'rows': rows},
       );
       return _unwrap(resp) as Map<String, dynamic>;
@@ -524,6 +483,21 @@ Future<Map<String, dynamic>> scopeBreakdown(String familyId, {required String mo
         'pair_secret': pairSecret,
       });
       return _unwrap(resp) as Map<String, dynamic>;
+    } on DioException catch (e) {
+      _throwDio(e);
+    }
+  }
+/// 用永久记住的设备标识直接换令牌。
+  /// 设备还没被授权过时后端返回 4101，调用方据此转去走配对流程。
+  Future<Session> deviceLogin(String deviceKey) async {
+    try {
+      final resp = await _dio.post('/api/v1/auth/device/login', data: {'device_key': deviceKey});
+      final data = _unwrap(resp) as Map<String, dynamic>;
+      return Session(
+        accessToken: data['access_token'] as String,
+        refreshToken: data['refresh_token'] as String,
+        user: AppUser.fromJson(data['user'] as Map<String, dynamic>),
+      );
     } on DioException catch (e) {
       _throwDio(e);
     }

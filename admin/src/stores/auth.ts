@@ -5,6 +5,7 @@ interface AdminUser {
   id: string
   account: string
   nickname: string
+  role?: string
 }
 
 function readUser(): AdminUser | null {

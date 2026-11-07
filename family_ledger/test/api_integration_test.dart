@@ -52,7 +52,7 @@ void main() {
     // 清理测试数据，避免污染账本
     for (final id in createdIds) {
       try {
-        await api.syncPush(family.id, [
+        await api.syncPush([
           {
             'client_op_id': 'cleanup-$id',
             'entity': 'transaction',
@@ -64,16 +64,16 @@ void main() {
     }
   });
 
-  test('登录后能拿到用户与家庭', () async {
-    final (user, families) = await api.me();
+  test('登录后能拿到用户与唯一家庭', () async {
+    final (user, familyOrNull) = await api.me();
     expect(user.account, account);
-    expect(families, isNotEmpty);
-    family = families.first;
+    expect(familyOrNull, isNotNull);
+    family = familyOrNull!;
     expect(family.name, isNotEmpty);
   });
 
   test('首次同步能拿到分类与账户', () async {
-    final data = await api.syncPull(family.id, 0);
+    final data = await api.syncPull(0);
     final changes = data['changes'] as Map<String, dynamic>;
     final categories = (changes['categories'] as List)
         .map((e) => Category.fromMap(Map<String, Object?>.from(e as Map)))
@@ -87,14 +87,14 @@ void main() {
   });
 
   test('客户端生成的账目能推上去，并被其他端拉到', () async {
-    final before = await api.syncPull(family.id, 0);
+    final before = await api.syncPull(0);
     final cursor = (before['cursor'] as num).toInt();
     final categoryId =
         (before['changes']['categories'] as List).first['id'] as String;
 
     final id = newId();
     createdIds.add(id);
-    final result = await api.syncPush(family.id, [
+    final result = await api.syncPush([
       {
         'client_op_id': 'test-$id',
         'entity': 'transaction',
@@ -114,7 +114,7 @@ void main() {
     final results = result['results'] as List;
     expect(results.first['status'], 'applied');
 
-    final after = await api.syncPull(family.id, cursor);
+    final after = await api.syncPull(cursor);
     final txs = (after['changes']['transactions'] as List)
         .map((e) => Transaction.fromMap(Map<String, Object?>.from(e as Map)))
         .toList();

@@ -31,7 +31,7 @@ func (h *Handler) importBill(w http.ResponseWriter, r *http.Request) {
 
 	summary, err := h.ledger.ImportBill(
 		r.Context(),
-		r.PathValue("id"),
+		familyIDFrom(r.Context()),
 		userIDFrom(r.Context()),
 		header.Filename,
 		data,
@@ -45,7 +45,7 @@ func (h *Handler) importBill(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listImports(w http.ResponseWriter, r *http.Request) {
-	batches, err := h.ledger.ListImports(r.Context(), r.PathValue("id"), userIDFrom(r.Context()),
+	batches, err := h.ledger.ListImports(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()),
 		parseInt(r.URL.Query().Get("limit"), 20))
 	if err != nil {
 		writeError(w, r, err)
@@ -78,7 +78,7 @@ func (h *Handler) saveCategoryRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	if err := h.ledger.SaveCategoryRule(r.Context(), r.PathValue("id"), userIDFrom(r.Context()),
+	if err := h.ledger.SaveCategoryRule(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()),
 		req.Keyword, req.CategoryID); err != nil {
 		writeError(w, r, err)
 		return
@@ -104,7 +104,7 @@ func (h *Handler) previewImport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, domain.ErrBadRequest.WithMessage("读取文件失败"))
 		return
 	}
-	result, err := h.ledger.PreviewImport(r.Context(), r.PathValue("id"), userIDFrom(r.Context()),
+	result, err := h.ledger.PreviewImport(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()),
 		header.Filename, data)
 	if err != nil {
 		writeError(w, r, err)
@@ -124,7 +124,7 @@ func (h *Handler) confirmImport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	summary, err := h.ledger.ConfirmImport(r.Context(), r.PathValue("id"), userIDFrom(r.Context()), req.Rows)
+	summary, err := h.ledger.ConfirmImport(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()), req.Rows)
 	if err != nil {
 		writeError(w, r, err)
 		return

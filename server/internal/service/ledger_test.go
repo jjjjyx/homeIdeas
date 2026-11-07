@@ -45,32 +45,28 @@ func newLedgerEnv(t *testing.T) *ledgerEnv {
 	families := service.NewFamilyService(db)
 	ledger := service.NewLedgerService(db)
 
-	owner, err := auth.Register(ctx, service.RegisterInput{Account: "papa", Password: testPassword, Nickname: "爸爸"})
-	if err != nil {
-		t.Fatalf("注册户主失败: %v", err)
-	}
-	card, err := families.Create(ctx, owner.UserID, "我们的家", "")
-	if err != nil {
-		t.Fatalf("建房失败: %v", err)
-	}
-	inv, err := families.CreateInvite(ctx, owner.UserID, card.ID, domain.RoleMember, 24, "")
-	if err != nil {
-		t.Fatalf("邀请失败: %v", err)
-	}
-	member, err := auth.Register(ctx, service.RegisterInput{
-		Account: "mama", Password: testPassword, Nickname: "妈妈", InviteCode: inv.Code,
+	owner, err := auth.Register(ctx, service.RegisterInput{
+		Account: "papa", Password: testPassword, Nickname: "爸爸", FamilyName: "我们的家",
 	})
 	if err != nil {
-		t.Fatalf("成员注册失败: %v", err)
+		t.Fatalf("初始化户主失败: %v", err)
+	}
+	family, err := db.PrimaryFamily(ctx, db.SQL())
+	if err != nil {
+		t.Fatalf("读取唯一家庭失败: %v", err)
+	}
+	member, err := families.AddMember(ctx, owner.UserID, "mama", testPassword, "妈妈", domain.RoleMember)
+	if err != nil {
+		t.Fatalf("添加成员失败: %v", err)
 	}
 
-	cats, err := db.CategoriesOfFamily(ctx, db.SQL(), card.ID)
+	cats, err := db.CategoriesOfFamily(ctx, db.SQL(), family.ID)
 	if err != nil {
 		t.Fatalf("读取分类失败: %v", err)
 	}
 	env := &ledgerEnv{
 		db: db, auth: auth, families: families, ledger: ledger,
-		familyID: card.ID, ownerID: owner.UserID, memberID: member.UserID,
+		familyID: family.ID, ownerID: owner.UserID, memberID: member.UserID,
 	}
 	for _, c := range cats {
 		switch c.Name {

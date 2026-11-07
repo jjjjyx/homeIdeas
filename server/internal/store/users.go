@@ -8,7 +8,7 @@ import (
 	"family-ledger/server/internal/domain"
 )
 
-const userColumns = `id, account, password_hash, nickname, avatar_url, phone, status, is_platform_admin, created_at, updated_at`
+const userColumns = `id, account, password_hash, nickname, avatar_url, phone, status, created_at, updated_at`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -16,26 +16,20 @@ type rowScanner interface {
 
 func scanUser(s rowScanner) (*domain.User, error) {
 	var u domain.User
-	var admin int
 	if err := s.Scan(&u.ID, &u.Account, &u.PasswordHash, &u.Nickname, &u.AvatarURL,
-		&u.Phone, &u.Status, &admin, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		&u.Phone, &u.Status, &u.CreatedAt, &u.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, domain.ErrNotFound
 		}
 		return nil, err
 	}
-	u.IsPlatformAdmin = admin == 1
 	return &u, nil
 }
 
 func (d *DB) CreateUser(ctx context.Context, q Querier, u *domain.User) error {
-	admin := 0
-	if u.IsPlatformAdmin {
-		admin = 1
-	}
 	_, err := q.ExecContext(ctx,
-		`INSERT INTO users (`+userColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		u.ID, u.Account, u.PasswordHash, u.Nickname, u.AvatarURL, u.Phone, u.Status, admin, u.CreatedAt, u.UpdatedAt)
+		`INSERT INTO users (`+userColumns+`) VALUES (?,?,?,?,?,?,?,?,?)`,
+		u.ID, u.Account, u.PasswordHash, u.Nickname, u.AvatarURL, u.Phone, u.Status, u.CreatedAt, u.UpdatedAt)
 	return err
 }
 
@@ -60,5 +54,12 @@ func (d *DB) UpdateUserPassword(ctx context.Context, q Querier, userID, hash str
 
 func (d *DB) SetUserStatus(ctx context.Context, q Querier, userID string, status int, now int64) error {
 	_, err := q.ExecContext(ctx, `UPDATE users SET status = ?, updated_at = ? WHERE id = ?`, status, now, userID)
+	return err
+}
+
+// RevokeTokensOfUser 吊销某个用户的全部刷新令牌（移除成员 / 封禁时使用）。
+func (d *DB) RevokeTokensOfUser(ctx context.Context, q Querier, userID string, now int64) error {
+	_, err := q.ExecContext(ctx,
+		`UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`, now, userID)
 	return err
 }

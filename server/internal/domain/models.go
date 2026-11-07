@@ -37,18 +37,18 @@ const (
 )
 
 type User struct {
-	ID              string
-	Account         string
-	PasswordHash    string
-	Nickname        string
-	AvatarURL       string
-	Phone           string
-	Status          int // 1 正常 0 禁用
-	IsPlatformAdmin bool
-	CreatedAt       int64
-	UpdatedAt       int64
+	ID           string
+	Account      string
+	PasswordHash string
+	Nickname     string
+	AvatarURL    string
+	Phone        string
+	Status       int // 1 正常 0 禁用
+	CreatedAt    int64
+	UpdatedAt    int64
 }
 
+// Family 系统唯一的家庭。单家庭模式下只存在一行有效记录。
 type Family struct {
 	ID        string
 	Name      string
@@ -69,6 +69,7 @@ type Member struct {
 	Account  string
 }
 
+// Invite 加入唯一家庭的邀请码。注册时凭码加入，角色由邀请码决定。
 type Invite struct {
 	ID        string
 	FamilyID  string

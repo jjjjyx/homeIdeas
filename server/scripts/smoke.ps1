@@ -1,4 +1,4 @@
-# 后端接口冒烟测试（认证 / 家庭 / 账本 / 同步 / 管理后台）
+﻿# 后端接口冒烟测试（单家庭：认证 / 邀请码 / 账本 / 同步 / 管理后台）
 #
 # 默认自带一个临时服务实例（临时数据库 + 随机端口），可重复执行；
 # 也可以指定 -BaseUrl 打到已经在跑的服务（注意：该库必须是空的）。
@@ -14,7 +14,6 @@ $script:pass = 0
 $script:fail = 0
 $script:serverProc = $null
 $script:tempDir = $null
-# 函数里 $MyInvocation.MyCommand.Path 是空的，脚本路径必须在脚本作用域先算好
 $script:scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:repoRoot = Split-Path -Parent $script:scriptRoot
 
@@ -29,7 +28,6 @@ function Start-TempServer {
         if (-not (Test-Path $bin)) { throw '编译服务端失败' }
     }
 
-    # 数据目录必须放在工作区内：系统临时目录下 SQLite 可能没有写权限
     $script:tempDir = Join-Path $root ('.smoke-tmp\' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
     New-Item -ItemType Directory -Force -Path $script:tempDir | Out-Null
 
@@ -38,6 +36,7 @@ function Start-TempServer {
     $env:HTTP_ADDR = ":$port"
     $env:DB_PATH = (Join-Path $script:tempDir 'app.db')
     $env:JWT_SECRET = 'smoke-test-secret-0123456789'
+    $env:MAIL_POLL_MINUTES = '0'
 
     $out = Join-Path $script:tempDir 'server.log'
     $err = Join-Path $script:tempDir 'server.err.log'
@@ -73,7 +72,6 @@ else {
     $script:BaseUrl = $BaseUrl
 }
 
-# 任何未捕获异常都要把临时服务停掉，避免留下僵尸进程
 trap {
     Stop-TempServer
     Write-Host "`n脚本异常终止: $_" -ForegroundColor Red
@@ -124,7 +122,6 @@ function Api {
         if ($resp) {
             try { $status = [int]$resp.StatusCode } catch { $status = 0 }
         }
-        # PS5.1 里 Invoke-RestMethod 已把响应流读走，错误体要从 ErrorDetails 取
         try {
             $raw = $null
             if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
@@ -144,10 +141,11 @@ function Api {
     }
 }
 
-Write-Host "`n=== 家庭记账本后端冒烟测试 @ $script:BaseUrl ===" -ForegroundColor Cyan
+Write-Host "`n=== 家庭记账本后端冒烟测试（单家庭） @ $script:BaseUrl ===" -ForegroundColor Cyan
 $suffix = (Get-Random -Minimum 10000 -Maximum 99999)
 $u1 = "papa$suffix"
 $u2 = "mama$suffix"
+$u3 = "uncle$suffix"
 $pwd = 'Smoke-Test-2026'
 
 Write-Host "`n[1] 健康检查"
@@ -156,30 +154,30 @@ Check 'healthz 返回 200' ($r.ok -and $r.body.data.status -eq 'ok')
 $r = Api GET '/readyz'
 Check 'readyz 数据库就绪' ($r.ok)
 
-Write-Host "`n[2] 首个用户注册（免邀请码，自动成为平台管理员）"
-$r = Api POST '/api/v1/auth/register' @{ account = $u1; password = $pwd; nickname = '爸爸' }
-Check "注册 $u1 成功" ($r.ok -and $r.body.data.access_token)
+Write-Host "`n[2] 首次初始化：创建唯一家庭 + 户主"
+$r = Api POST '/api/v1/auth/register' @{ account = $u1; password = $pwd; nickname = '爸爸'; family_name = '我们的家' }
+Check "初始化 $u1 成功" ($r.ok -and $r.body.data.access_token)
 $tok1 = $r.body.data.access_token
 $uid1 = $r.body.data.user.id
-Check '首个用户是平台管理员' ($r.body.data.user.is_platform_admin -eq $true)
 $refresh1 = $r.body.data.refresh_token
+Check '首个用户是户主' ($r.body.data.user.role -eq 'owner')
+Check '首个用户可进管理后台' ($r.body.data.user.is_platform_admin -eq $true)
 
-Write-Host "`n[3] /me"
+Write-Host "`n[3] /me：唯一家庭"
 $r = Api GET '/api/v1/me' -Token $tok1
 Check 'me 返回用户信息' ($r.ok -and $r.body.data.user.account -eq $u1)
-Check '暂无家庭' ($r.body.data.families.Count -eq 0)
+Check '家庭已自动创建' ($r.body.data.family.name -eq '我们的家')
+Check '家庭里只有 1 位成员' ($r.body.data.members.Count -eq 1)
+$famName = $r.body.data.family.name
 
-Write-Host "`n[4] 创建家庭 + 默认分类"
-$r = Api POST '/api/v1/families' @{ name = '小明的家' } -Token $tok1
-Check '创建家庭成功' ($r.ok -and $r.body.data.name -eq '小明的家')
-$fam1 = $r.body.data.id
-Check '创建者是 owner' ($r.body.data.my_role -eq 'owner')
-Check '初始 rev = 1' ($r.body.data.rev -eq 1)
-$r = Api GET "/api/v1/families/$fam1" -Token $tok1
-Check '家庭详情有 1 位成员' ($r.body.data.members.Count -eq 1)
+Write-Host "`n[4] 修改家庭名称"
+$r = Api PATCH '/api/v1/family' @{ name = '我们的家·测试' } -Token $tok1
+Check 'owner 改名成功' ($r.ok)
+$r = Api GET '/api/v1/family' -Token $tok1
+Check '家庭名已更新' ($r.body.data.family.name -eq '我们的家·测试')
 
-Write-Host "`n[5] 生成邀请码"
-$r = Api POST "/api/v1/families/$fam1/invites" @{ role = 'member'; expires_in_hours = 24 } -Token $tok1
+Write-Host "`n[5] 生成邀请码（成员加入的主要方式）"
+$r = Api POST '/api/v1/family/invites' @{ role = 'member'; expires_in_hours = 24 } -Token $tok1
 Check '生成邀请码成功' ($r.ok -and $r.body.data.code.Length -eq 6)
 $code = $r.body.data.code
 
@@ -187,74 +185,68 @@ Write-Host "`n[6] 无邀请码注册第二个用户（应被拒绝）"
 $r = Api POST '/api/v1/auth/register' @{ account = "ghost$suffix"; password = $pwd; nickname = '路人' }
 Check '拒绝无邀请码注册 (4003)' ((-not $r.ok) -and $r.body.code -eq 4003)
 
-Write-Host "`n[7] 用邀请码注册并加入家庭"
+Write-Host "`n[7] 用邀请码注册并加入唯一家庭"
 $r = Api POST '/api/v1/auth/register' @{ account = $u2; password = $pwd; nickname = '妈妈'; invite_code = $code }
 Check "注册 $u2 并加入家庭" ($r.ok -and $r.body.data.user.account -eq $u2)
 $tok2 = $r.body.data.access_token
 $uid2 = $r.body.data.user.id
+Check '新用户角色是 member' ($r.body.data.user.role -eq 'member')
 $r = Api GET '/api/v1/me' -Token $tok2
-Check '新用户能看到该家庭' ($r.body.data.families.Count -eq 1)
+Check '新用户看到同一个家庭' ($r.body.data.family.name -eq '我们的家·测试')
 
 Write-Host "`n[8] 成员列表"
-$r = Api GET "/api/v1/families/$fam1/members" -Token $tok1
+$r = Api GET '/api/v1/family/members' -Token $tok1
 Check '家庭成员数为 2' ($r.body.data.items.Count -eq 2)
 Check '按角色排序（owner 在前）' ($r.body.data.items[0].role -eq 'owner')
 
 Write-Host "`n[9] 重复使用同一邀请码（应失败）"
-$r = Api POST '/api/v1/auth/register' @{ account = "uncle$suffix"; password = $pwd; nickname = '叔叔'; invite_code = $code }
+$r = Api POST '/api/v1/auth/register' @{ account = $u3; password = $pwd; nickname = '叔叔'; invite_code = $code }
 Check '邀请码不可复用 (4004)' ((-not $r.ok) -and $r.body.code -eq 4004)
 
-Write-Host "`n[10] 越权：访问别人的家庭"
-$r = Api POST '/api/v1/families' @{ name = '妈妈自己的家' } -Token $tok2
-$fam2 = $r.body.data.id
-Check '第二个用户也能创建自己的家庭' ($r.ok)
-$r = Api GET "/api/v1/families/$fam2" -Token $tok1
-Check '爸爸访问妈妈的家庭被拒绝 (403)' ((-not $r.ok) -and $r.status -eq 403)
-
-Write-Host "`n[11] 修改家庭名（owner 可以）"
-$r = Api PATCH "/api/v1/families/$fam1" @{ name = '我们的家' } -Token $tok1
-Check 'owner 改名成功' ($r.ok)
-
-Write-Host "`n[12] 普通成员改名（应 403）"
-$r = Api PATCH "/api/v1/families/$fam1" @{ name = '乱改' } -Token $tok2
+Write-Host "`n[10] 普通成员不能改名"
+$r = Api PATCH '/api/v1/family' @{ name = '乱改' } -Token $tok2
 Check 'member 改名被拒绝 (403)' ((-not $r.ok) -and $r.status -eq 403)
 
-Write-Host "`n[13] 户主把成员提升为管理员"
-$r = Api PATCH "/api/v1/families/$fam1/members/$uid2" @{ role = 'admin' } -Token $tok1
+Write-Host "`n[11] 户主把成员提升为管理员"
+$r = Api PATCH "/api/v1/family/members/$uid2" @{ role = 'admin' } -Token $tok1
 Check '提升为 admin 成功' ($r.ok)
-$r = Api GET "/api/v1/families/$fam1/members" -Token $tok1
+$r = Api GET '/api/v1/family/members' -Token $tok1
 $roleOf2 = ($r.body.data.items | Where-Object { $_.user_id -eq $uid2 }).role
 Check '角色已变为 admin' ($roleOf2 -eq 'admin')
 
-Write-Host "`n[14] 管理员不能移除户主"
-$r = Api DELETE "/api/v1/families/$fam1/members/$uid1" -Token $tok2
+Write-Host "`n[12] 管理员不能移除户主"
+$r = Api DELETE "/api/v1/family/members/$uid1" -Token $tok2
 Check '移除户主被拒绝' ((-not $r.ok) -and ($r.body.code -eq 4005 -or $r.status -eq 403))
 
-Write-Host "`n[15] 令牌刷新"
+Write-Host "`n[13] 只有户主能发管理员邀请；管理员只能发成员邀请"
+$r = Api POST '/api/v1/family/invites' @{ role = 'admin'; expires_in_hours = 24 } -Token $tok2
+Check '管理员发 admin 邀请被拒绝 (403)' ((-not $r.ok) -and $r.status -eq 403)
+$r = Api POST '/api/v1/family/invites' @{ role = 'member'; expires_in_hours = 24 } -Token $tok2
+Check '管理员可以发 member 邀请' ($r.ok -and $r.body.data.code.Length -eq 6)
+
+Write-Host "`n[14] 令牌刷新"
 $r = Api POST '/api/v1/auth/refresh' @{ refresh_token = $refresh1 }
 Check 'refresh 换取新 access token' ($r.ok -and $r.body.data.access_token)
 $newTok = $r.body.data.access_token
 $r = Api GET '/api/v1/me' -Token $newTok
 Check '新令牌可用' ($r.ok)
 
-Write-Host "`n[16] 退出登录后 refresh 失效"
+Write-Host "`n[15] 退出登录后 refresh 失效"
 $r = Api POST '/api/v1/auth/logout' @{ refresh_token = $refresh1 }
 Check 'logout 成功' ($r.ok)
 $r = Api POST '/api/v1/auth/refresh' @{ refresh_token = $refresh1 }
 Check 'refresh 已失效 (401)' ((-not $r.ok) -and $r.status -eq 401)
 
-Write-Host "`n[17] 无令牌访问受保护接口"
+Write-Host "`n[16] 未登录 / 错误密码"
 $r = Api GET '/api/v1/me'
 Check '未登录返回 401' ((-not $r.ok) -and $r.status -eq 401)
-
-Write-Host "`n[18] 错误密码登录"
 $r = Api POST '/api/v1/auth/login' @{ account = $u1; password = 'wrong-password' }
 Check '错误密码返回 401' ((-not $r.ok) -and $r.status -eq 401)
 
-# ---------------- M2：账本与同步 ----------------
+# ---------------- 账本与同步 ----------------
 
-Write-Host "`n[19] 同步拉取（首次全量：分类/账户/成员）"
-$r = Api GET "/api/v1/families/$fam1/sync?since=0" -Token $tok1
+Write-Host "`n[17] 同步拉取（首次全量：分类/账户/成员）"
+$r = Api GET '/api/v1/sync?since=0' -Token $tok1
 Check 'sync 返回 200' ($r.ok)
 $changes = $r.body.data.changes
 Check '默认分类 19 个' ($changes.categories.Count -eq 19)
@@ -265,125 +257,116 @@ Check '能取到餐饮分类 id' ([bool]$catFood)
 $cursor0 = $r.body.data.cursor
 Check '初始 cursor 大于 0' ($cursor0 -gt 0)
 
-Write-Host "`n[20] 记一笔支出"
+Write-Host "`n[18] 记一笔支出"
 $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-$r = Api POST "/api/v1/families/$fam1/transactions" @{ type = 0; amount_cents = 12850; category_id = $catFood; occurred_at = $now; note = '午饭' } -Token $tok1
+$r = Api POST '/api/v1/transactions' @{ type = 0; amount_cents = 12850; category_id = $catFood; occurred_at = $now; note = '午饭' } -Token $tok1
 Check '记账成功' ($r.ok -and $r.body.data.amount_cents -eq 12850)
 Check '返回 rev' ($r.body.data.rev -gt 0)
 $tx1 = $r.body.data.id
 
-Write-Host "`n[21] 账目列表"
-$r = Api GET "/api/v1/families/$fam1/transactions" -Token $tok1
+Write-Host "`n[19] 账目列表 / 统计"
+$r = Api GET '/api/v1/transactions' -Token $tok1
 Check '列表返回 1 条' ($r.body.data.items.Count -eq 1)
 Check '金额正确' ($r.body.data.items[0].amount_cents -eq 12850)
-
-Write-Host "`n[22] 统计：月度汇总 / 分类占比 / 趋势"
-$r = Api GET "/api/v1/families/$fam1/stats/summary" -Token $tok1
+$r = Api GET '/api/v1/stats/summary' -Token $tok1
 Check '汇总支出 12850' ($r.body.data.expense_cents -eq 12850)
 Check '汇总收入 0' ($r.body.data.income_cents -eq 0)
-$r = Api GET "/api/v1/families/$fam1/stats/categories?type=0" -Token $tok1
+$r = Api GET '/api/v1/stats/categories?type=0' -Token $tok1
 Check '分类统计 1 条' ($r.body.data.items.Count -eq 1)
 Check '占比为 100%' ([math]::Abs($r.body.data.items[0].ratio - 1) -lt 0.001)
-$r = Api GET "/api/v1/families/$fam1/stats/trend?months=6&type=0" -Token $tok1
+$r = Api GET '/api/v1/stats/trend?months=6&type=0' -Token $tok1
 Check '趋势返回 6 个月' ($r.body.data.items.Count -eq 6)
 Check '最后一个月金额正确' ($r.body.data.items[5].amount_cents -eq 12850)
 
-Write-Host "`n[23] 私密账对家人不可见"
-$r = Api POST "/api/v1/families/$fam1/transactions" @{ type = 0; amount_cents = 9900; category_id = $catFood; occurred_at = $now; note = '私房钱'; visibility = 'private' } -Token $tok1
+Write-Host "`n[20] 私密账对家人不可见"
+$r = Api POST '/api/v1/transactions' @{ type = 0; amount_cents = 9900; category_id = $catFood; occurred_at = $now; note = '私房钱'; visibility = 'private' } -Token $tok1
 Check '创建私密账成功' ($r.ok)
-$r = Api GET "/api/v1/families/$fam1/transactions" -Token $tok2
+$r = Api GET '/api/v1/transactions' -Token $tok2
 Check '成员只看到 1 条（看不到私密账）' ($r.body.data.items.Count -eq 1)
-$r = Api GET "/api/v1/families/$fam1/transactions" -Token $tok1
+$r = Api GET '/api/v1/transactions' -Token $tok1
 Check '本人看到 2 条' ($r.body.data.items.Count -eq 2)
 
-Write-Host "`n[24] 增量同步：游标之后无变化"
-$r = Api GET "/api/v1/families/$fam1/sync?since=$cursor0" -Token $tok1
+Write-Host "`n[21] 增量同步"
+$r = Api GET "/api/v1/sync?since=$cursor0" -Token $tok1
 $cursor1 = $r.body.data.cursor
 Check '增量返回 2 条账单' ($r.body.data.changes.transactions.Count -eq 2)
-$r = Api GET "/api/v1/families/$fam1/sync?since=$cursor1" -Token $tok1
+$r = Api GET "/api/v1/sync?since=$cursor1" -Token $tok1
 Check '再拉一次为空' ($r.body.data.changes.transactions.Count -eq 0)
 Check 'cursor 不再前进' ($r.body.data.cursor -eq $cursor1)
 
-Write-Host "`n[25] 离线推送（客户端生成 id）"
+Write-Host "`n[22] 离线推送（客户端生成 id）"
 $offlineId = '01a1' + (Get-Random -Minimum 100000 -Maximum 999999) + '000000000000'
-$r = Api POST "/api/v1/families/$fam1/sync/push" @{ ops = @(@{ client_op_id = 'local-1'; entity = 'transaction'; op = 'upsert'; base_rev = 0; payload = @{ id = $offlineId; type = 0; amount_cents = 3000; category_id = $catFood; occurred_at = $now; note = '离线记的' } }) } -Token $tok2
+$r = Api POST '/api/v1/sync/push' @{ ops = @(@{ client_op_id = 'local-1'; entity = 'transaction'; op = 'upsert'; base_rev = 0; payload = @{ id = $offlineId; type = 0; amount_cents = 3000; category_id = $catFood; occurred_at = $now; note = '离线记的' } }) } -Token $tok2
 Check '推送状态 applied' ($r.ok -and $r.body.data.results[0].status -eq 'applied')
 Check '返回 rev' ($r.body.data.results[0].rev -gt 0)
-$r = Api GET "/api/v1/families/$fam1/sync?since=$cursor1" -Token $tok1
+$r = Api GET "/api/v1/sync?since=$cursor1" -Token $tok1
 Check '户主能拉到成员离线记的账' (@($r.body.data.changes.transactions | Where-Object { $_.id -eq $offlineId }).Count -eq 1)
 
-Write-Host "`n[26] 版本冲突"
-$r = Api POST "/api/v1/families/$fam1/sync/push" @{ ops = @(@{ client_op_id = 'local-2'; entity = 'transaction'; op = 'upsert'; base_rev = 1; payload = @{ id = $offlineId; type = 0; amount_cents = 7777; category_id = $catFood; occurred_at = $now } }) } -Token $tok2
+Write-Host "`n[23] 版本冲突"
+$r = Api POST '/api/v1/sync/push' @{ ops = @(@{ client_op_id = 'local-2'; entity = 'transaction'; op = 'upsert'; base_rev = 1; payload = @{ id = $offlineId; type = 0; amount_cents = 7777; category_id = $catFood; occurred_at = $now } }) } -Token $tok2
 Check '旧版本推送判定为 conflict' ($r.body.data.results[0].status -eq 'conflict')
 Check '冲突时回传服务端版本' ($r.body.data.results[0].server.amount_cents -eq 3000)
 
-Write-Host "`n[27] 删除账单（软删 + 墓碑）"
-$r = Api DELETE "/api/v1/families/$fam1/transactions/$tx1" -Token $tok1
+Write-Host "`n[24] 删除账单（软删 + 墓碑）"
+$r = Api DELETE "/api/v1/transactions/$tx1" -Token $tok1
 Check '删除成功' ($r.ok)
-$r = Api GET "/api/v1/families/$fam1/sync?since=$cursor1" -Token $tok1
+$r = Api GET "/api/v1/sync?since=$cursor1" -Token $tok1
 $tomb = $r.body.data.changes.transactions | Where-Object { $_.id -eq $tx1 }
 Check '同步下发墓碑 deleted_at' ([bool]$tomb -and [bool]$tomb.deleted_at)
 
-Write-Host "`n[28] 越权：往别人家记账"
-$r = Api POST "/api/v1/families/$fam2/transactions" @{ type = 0; amount_cents = 100; category_id = $catFood; occurred_at = $now } -Token $tok1
-Check '爸爸不能往妈妈家记账 (403)' ((-not $r.ok) -and $r.status -eq 403)
+# ---------------- 管理后台 ----------------
 
-# ---------------- M3：管理后台 ----------------
-
-Write-Host "`n[29] 管理后台登录"
+Write-Host "`n[25] 管理后台登录"
 $r = Api POST '/admin/api/auth/login' @{ account = $u1; password = $pwd }
-Check '平台管理员登录成功' ($r.ok -and $r.body.data.access_token)
+Check '户主登录成功' ($r.ok -and $r.body.data.access_token)
 $adminTok = $r.body.data.access_token
-
-Write-Host "`n[30] 普通用户不能登录管理后台"
 $r = Api POST '/admin/api/auth/login' @{ account = $u2; password = $pwd }
-Check '普通用户被拒绝 (403)' ((-not $r.ok) -and $r.status -eq 403)
+Check '管理员也能登录' ($r.ok)
+$adminTok2 = $r.body.data.access_token
 
-Write-Host "`n[31] 平台概览"
+Write-Host "`n[26] 单家庭概览"
 $r = Api GET '/admin/api/overview' -Token $adminTok
 Check '概览返回 200' ($r.ok)
-Check '用户数 >= 2' ($r.body.data.users -ge 2)
-Check '家庭数 >= 2' ($r.body.data.families -ge 2)
+Check '家庭成员数为 2' ($r.body.data.members -eq 2)
+Check '概览包含当前家庭' ($r.body.data.family.name -eq '我们的家·测试')
+Check '账目总数 >= 2' ($r.body.data.transactions -ge 2)
 
-Write-Host "`n[32] 用户列表"
-$r = Api GET '/admin/api/users' -Token $adminTok
-Check '用户列表有数据' ($r.body.data.items.Count -ge 2)
-$papa = $r.body.data.items | Where-Object { $_.account -eq $u1 }
-Check '首个用户标记为平台管理员' ($papa.is_platform_admin -eq $true)
-
-Write-Host "`n[33] 家庭列表 + 账目查询"
-$r = Api GET '/admin/api/families' -Token $adminTok
-Check '家庭列表有数据' ($r.body.data.items.Count -ge 2)
-$r = Api GET "/admin/api/families/$fam1/transactions" -Token $adminTok
+Write-Host "`n[27] 后台成员列表 / 账目"
+$r = Api GET '/admin/api/members' -Token $adminTok
+Check '成员列表有 2 人' ($r.body.data.total -eq 2)
+$r = Api GET '/admin/api/transactions' -Token $adminTok
 Check '后台能查到家庭账目' ($r.body.data.items.Count -ge 1)
 
-Write-Host "`n[34] 审计日志"
+Write-Host "`n[28] 审计日志"
 $r = Api GET '/admin/api/audit-logs' -Token $adminTok
 Check '审计日志有记录' ($r.body.data.items.Count -gt 0)
-$hasRegister = @($r.body.data.items | Where-Object { $_.action -eq 'auth.register' }).Count -gt 0
-Check '包含注册审计' ($hasRegister)
+Check '包含注册审计' (@($r.body.data.items | Where-Object { $_.action -eq 'auth.register' }).Count -gt 0)
 
-Write-Host "`n[35] 令牌隔离：App 令牌打不进管理接口"
+Write-Host "`n[29] 令牌隔离：App 令牌打不进管理接口"
 $r = Api GET '/admin/api/overview' -Token $tok1
 Check 'App 令牌访问管理接口被拒 (401)' ((-not $r.ok) -and $r.status -eq 401)
 
-Write-Host "`n[36] 封禁 / 解禁用户"
-$r = Api PATCH "/admin/api/users/$uid2" @{ status = 0 } -Token $adminTok
+Write-Host "`n[30] 封禁 / 解禁成员"
+$r = Api PATCH "/admin/api/members/$uid2" @{ status = 0 } -Token $adminTok
 Check '封禁成功' ($r.ok)
 $r = Api POST '/api/v1/auth/login' @{ account = $u2; password = $pwd }
-Check '被封禁用户无法登录 (403)' ((-not $r.ok) -and $r.status -eq 403)
-$r = Api PATCH "/admin/api/users/$uid2" @{ status = 1 } -Token $adminTok
+Check '被封禁成员无法登录 (403)' ((-not $r.ok) -and $r.status -eq 403)
+$r = Api PATCH "/admin/api/members/$uid2" @{ status = 1 } -Token $adminTok
 Check '解禁成功' ($r.ok)
 $r = Api POST '/api/v1/auth/login' @{ account = $u2; password = $pwd }
 Check '解禁后可正常登录' ($r.ok)
 
-Write-Host "`n[37] 管理后台静态页"
+Write-Host "`n[31] 邀请码（后台）"
+$r = Api POST '/admin/api/invites' @{ role = 'member'; expires_in_hours = 24 } -Token $adminTok
+Check '后台生成邀请码成功' ($r.ok -and $r.body.data.code.Length -eq 6)
+
+Write-Host "`n[32] 管理后台静态页"
 $r = Api GET '/admin/'
 Check '返回 HTML 页面' ($r.ok -and "$($r.body)" -like '*id="app"*')
 
-Write-Host "`n[38] 账目 CSV 导出"
+Write-Host "`n[33] 账目 CSV 导出"
 try {
-    $csv = Invoke-WebRequest -Uri "$script:BaseUrl/api/v1/families/$fam1/export.csv" `
+    $csv = Invoke-WebRequest -Uri "$script:BaseUrl/api/v1/export.csv" `
         -Headers @{ Authorization = "Bearer $tok1" } -UseBasicParsing -TimeoutSec 15
     Check '导出返回 200' ($csv.StatusCode -eq 200)
     Check 'Content-Type 是 CSV' ("$($csv.Headers['Content-Type'])" -like 'text/csv*')
@@ -400,6 +383,30 @@ try {
     Check '表头正确' $false
     Check '至少有一行账目' $false
     Check '包含成员离线记的账(30.00)' $false
+}
+
+Write-Host "`n[34] 设备配对（批准后自动登录）"
+$r = Api POST '/api/v1/auth/device/start' @{ device_uid = "smoke-device-$suffix"; device_key = "key-$suffix"; model = 'Smoke Device'; os_version = 'Test'; app_version = '1.0.0' }
+Check '发起配对成功' ($r.ok -and $r.body.data.pair_code)
+$pairCode = $r.body.data.pair_code
+$pairSecret = $r.body.data.pair_secret
+$r = Api GET '/admin/api/devices/pending' -Token $adminTok
+$pending = $r.body.data.items | Where-Object { $_.pair_code -eq $pairCode }
+Check '后台能看到待授权设备' ([bool]$pending)
+if ($pending) {
+    $r = Api POST "/admin/api/devices/$($pending.id)/approve" @{ user_id = $uid1; role = 'owner' } -Token $adminTok
+    Check '批准设备成功' ($r.ok)
+    $r = Api POST '/api/v1/auth/device/poll' @{ pair_code = $pairCode; pair_secret = $pairSecret }
+    Check '设备拿到令牌' ($r.ok -and $r.body.data.access_token)
+    $deviceTok = $r.body.data.access_token
+    $r = Api GET '/api/v1/me' -Token $deviceTok
+    Check '设备会话进入唯一家庭' ($r.ok -and $r.body.data.family.name -eq '我们的家·测试')
+
+    $r = Api POST '/api/v1/auth/device/login' @{ device_key = "key-$suffix" }
+    Check '已授权设备可免配对直接登录' ($r.ok -and $r.body.data.access_token)
+
+    $r = Api POST '/api/v1/auth/device/start' @{ device_uid = "smoke-device-$suffix"; device_key = "key-$suffix"; model = 'Smoke Device'; os_version = 'Test'; app_version = '1.0.0' }
+    Check '已授权设备再次发起配对被拒绝 (409)' ((-not $r.ok) -and $r.status -eq 409)
 }
 
 Write-Host "`n=== 结果：$script:pass 通过 / $script:fail 失败 ===" -ForegroundColor Cyan

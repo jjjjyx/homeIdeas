@@ -17,6 +17,7 @@ type ctxKey string
 const (
 	ctxKeyRequestID ctxKey = "request_id"
 	ctxKeyUserID    ctxKey = "user_id"
+	ctxKeyFamilyID  ctxKey = "family_id"
 )
 
 func requestIDFrom(ctx context.Context) string {
@@ -31,6 +32,23 @@ func userIDFrom(ctx context.Context) string {
 		return v
 	}
 	return ""
+}
+
+// familyIDFrom 单家庭系统里的唯一家庭 ID，由鉴权中间件注入。
+func familyIDFrom(ctx context.Context) string {
+	if v, ok := ctx.Value(ctxKeyFamilyID).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// withFamily 把唯一家庭 ID 放进上下文；系统尚未初始化时留空，由业务层处理。
+func (h *Handler) withFamily(ctx context.Context) context.Context {
+	id, err := h.db.PrimaryFamilyID(ctx, h.db.SQL())
+	if err != nil {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyFamilyID, id)
 }
 
 func withRequestID(next http.Handler) http.Handler {
@@ -133,6 +151,7 @@ func (h *Handler) requireAuth(next http.Handler) http.Handler {
 			return
 		}
 		ctx := context.WithValue(r.Context(), ctxKeyUserID, claims.UserID)
+		ctx = h.withFamily(ctx)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -173,6 +192,7 @@ func (h *Handler) requireAdmin(next http.Handler) http.Handler {
 			return
 		}
 		ctx := context.WithValue(r.Context(), ctxKeyUserID, user.ID)
+		ctx = h.withFamily(ctx)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

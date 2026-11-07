@@ -2,13 +2,12 @@
   <el-container class="layout">
     <el-aside width="208px" class="aside">
       <div class="brand">家庭记账本</div>
-      <div class="brand-sub">管理后台</div>
+      <div class="brand-sub">单家庭管理后台</div>
       <el-menu :default-active="$route.path" router class="menu">
-        <el-menu-item index="/dashboard">概览</el-menu-item>
-        <el-menu-item index="/users">用户管理</el-menu-item>
-        <el-menu-item index="/families">家庭与账目</el-menu-item>
+        <el-menu-item index="/dashboard">家庭概览</el-menu-item>
+        <el-menu-item index="/ledger">账目</el-menu-item>
+        <el-menu-item index="/members">家庭成员</el-menu-item>
         <el-menu-item index="/audit">审计日志</el-menu-item>
-        <el-menu-item index="/devices">设备授权</el-menu-item>
       </el-menu>
     </el-aside>
 

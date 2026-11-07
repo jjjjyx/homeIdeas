@@ -16,9 +16,9 @@
 ② App 显示「配对码 482163 · 等待批准」+ 每 2 秒轮询
    POST /auth/device/poll {pair_code, pair_secret}
 
-③ 批准方（管理后台 或 户主的 App）看到待授权设备：
+③ 批准方（管理后台）看到待授权设备：
        小米 M2102J2SC · Android 11 · 19:42 · 192.168.1.5 · 配对码 482163
-   选择：已有账号「妈妈」+ 家庭「我们的家」+ 角色「成员」→ 批准
+   选择：已有账号「妈妈」+ 角色「成员」→ 批准（单家庭，无需选择家庭）
 
 ④ App 轮询到 approved → 直接拿到 access/refresh token → 进入主界面
 
@@ -42,7 +42,6 @@ CREATE TABLE devices (
   id            TEXT PRIMARY KEY,      -- UUIDv7
   device_uid    TEXT NOT NULL,         -- App 本地生成的稳定标识
   user_id       TEXT,                  -- 批准后绑定；NULL 表示待授权
-  family_id     TEXT,                  -- 批准时指定的默认家庭
   role          TEXT,                  -- 批准时指定的角色
   model         TEXT,                  -- 小米 M2102J2SC
   os_version    TEXT,                  -- Android 11
@@ -70,18 +69,18 @@ CREATE INDEX idx_devices_uid ON devices(device_uid);
 
 | 接口 | 说明 |
 |---|---|
-| `POST /api/v1/auth/device/start` | 入参 `{device_uid, model, os_version, app_version}`；返回 `{pair_code, pair_secret, expires_in}` |
-| `POST /api/v1/auth/device/poll` | 入参 `{pair_code, pair_secret}`；返回 `{status}`，approved 时附带 `{access_token, refresh_token, expires_in, user, families}` |
+| `POST /api/v1/auth/device/start` | 入参 `{device_uid, device_key, model, os_version, app_version}`；返回 `{pair_code, pair_secret, expires_in}` |
+| `POST /api/v1/auth/device/poll` | 入参 `{pair_code, pair_secret}`；返回 `{status}`，approved 时附带 `{access_token, refresh_token, expires_in, user}` |
 
-### 需要管理员/户主
+### 需要管理员/户主（管理后台）
 
 | 接口 | 说明 |
 |---|---|
-| `GET /api/v1/devices/pending` | 待授权列表 |
-| `POST /api/v1/devices/{id}/approve` | 入参 `{user_id, family_id, role}`；`user_id` 为空且传了 `new_user{account,nickname}` 时创建新用户 |
-| `POST /api/v1/devices/{id}/reject` | 拒绝 |
-| `GET /api/v1/devices` | 全部设备（含已授权/已吊销） |
-| `POST /api/v1/devices/{id}/revoke` | 吊销 |
+| `GET /admin/api/devices/pending` | 待授权列表 |
+| `POST /admin/api/devices/{id}/approve` | 入参 `{user_id, role}`；`user_id` 为空且传了 `new_account/new_nickname` 时创建新用户并加入唯一家庭 |
+| `POST /admin/api/devices/{id}/reject` | 拒绝 |
+| `GET /admin/api/devices` | 全部设备（含已授权/已吊销） |
+| `POST /admin/api/devices/{id}/revoke` | 吊销 |
 
 ## 五、状态机
 
@@ -108,7 +107,7 @@ unpaired ──start──> waiting ──poll:approved──> paired ──绑�
 | 配对码被猜到 | 6 位数字 + 10 分钟过期 + 同 IP 每分钟最多 3 次 start |
 | 轮询被劫持 | `pair_secret` 必须匹配（只存哈希），否则 404 |
 | 一次性 | approved 后 `pair_secret` 立即失效，重复 poll 返回相同结果但不给新令牌 |
-| 批准权限 | 只有 `is_platform_admin` 或该家庭的 owner 能批准 |
+| 批准权限 | 只有唯一家庭的 `owner` / `admin` 能批准 |
 | 设备伪装 | 记录 IP + UA；同一 IP 短时间内多次 pending 报警 |
 | 令牌泄露 | refresh token 绑定 device_id，吊销设备即失效 |
 | 旧设备 | 允许一台设备同时在线，但列表里能看出重复，可手动吊销 |
@@ -124,12 +123,12 @@ unpaired ──start──> waiting ──poll:approved──> paired ──绑�
 | 用户改了手机 | 新设备配对，旧设备吊销 |
 | 一个用户多台设备 | 允许；每台一条记录 |
 | 待授权列表堆积 | 24 小时后自动清理 expired |
-| 用户属于多个家庭 | 绑定 user 后仍走现有的「选家庭」页面 |
+| 成员还没有账号 | 先让户主/管理员发邀请码，用邀请码注册后再配对；或在批准页直接新建用户 |
 
 ## 八、和现有功能的关系
 
-- **账号密码登录**：保留，作为管理员兜底和批准方不可用时的入口
-- **邀请码**：保留，但职责缩小为「快速建号」；设备授权是更顺的主路径
+- **账号密码登录**：保留，作为管理员兜底和 App 启动页的备用入口
+- **邀请码**：保留，是成员加入/注册的主要方式；设备授权是登录的主要方式
 - **指纹解锁**：配对成功后引导开启，冷启动只需指纹
 
 ## 九、实施顺序

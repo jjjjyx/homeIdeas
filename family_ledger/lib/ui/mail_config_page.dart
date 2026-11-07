@@ -29,7 +29,6 @@ class _MailConfigPageState extends State<MailConfigPage> {
   String? _error;
 
   RemoteApi get _api => widget.auth.api;
-  String? get _familyId => widget.auth.currentFamily?.id;
 
   @override
   void initState() {
@@ -47,13 +46,8 @@ class _MailConfigPageState extends State<MailConfigPage> {
   }
 
   Future<void> _load() async {
-    final fid = _familyId;
-    if (fid == null) {
-      setState(() => _loading = false);
-      return;
-    }
     try {
-      final data = await _api.mailStatus(fid);
+      final data = await _api.mailStatus();
       if (!mounted) return;
       setState(() {
         _status = data;
@@ -97,10 +91,7 @@ class _MailConfigPageState extends State<MailConfigPage> {
   }
 
   Future<void> _test() => _run(() async {
-        final fid = _familyId;
-        if (fid == null) return;
         await _api.testMailConfig(
-          fid,
           host: _host.text.trim(),
           port: int.tryParse(_port.text.trim()) ?? 993,
           username: _user.text.trim(),
@@ -110,10 +101,7 @@ class _MailConfigPageState extends State<MailConfigPage> {
       });
 
   Future<void> _save({bool resetCursor = false}) => _run(() async {
-        final fid = _familyId;
-        if (fid == null) return;
         await _api.saveMailConfig(
-          fid,
           host: _host.text.trim(),
           port: int.tryParse(_port.text.trim()) ?? 993,
           username: _user.text.trim(),
@@ -127,9 +115,7 @@ class _MailConfigPageState extends State<MailConfigPage> {
       });
 
   Future<void> _sync() => _run(() async {
-        final fid = _familyId;
-        if (fid == null) return;
-        final r = await _api.syncMail(fid);
+        final r = await _api.syncMail();
         await _load();
         if (!mounted) return;
         final imported = r['imported'] ?? 0;
@@ -185,10 +171,7 @@ class _MailConfigPageState extends State<MailConfigPage> {
     if (password == null || password.isEmpty) return;
 
     await _run(() async {
-      final fid = _familyId;
-      if (fid == null) return;
       final r = await _api.submitMailPassword(
-        fid,
         password,
         messageId: message['id'] as String? ?? '',
       );

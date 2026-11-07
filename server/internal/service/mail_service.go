@@ -458,17 +458,18 @@ func urlPath(raw string) string {
 	return ""
 }
 
-// SyncAll 供定时任务调用：串行处理所有家庭，单个家庭失败不影响其他。
+// SyncAll 供定时任务调用：同步唯一家庭的账单邮箱。
 func (s *MailService) SyncAll(ctx context.Context) {
-	accounts, err := s.db.ListEnabledMailAccounts(ctx, s.db.SQL())
+	familyID, err := s.db.PrimaryFamilyID(ctx, s.db.SQL())
 	if err != nil {
-		slog.Error("读取邮箱配置失败", "err", err)
+		if errors.Is(err, domain.ErrNotFound) {
+			return // 还没初始化家庭
+		}
+		slog.Error("读取家庭失败", "err", err)
 		return
 	}
-	for _, account := range accounts {
-		if _, err := s.SyncFamily(ctx, account.FamilyID); err != nil {
-			slog.Warn("账单邮件同步失败", "family", account.FamilyID, "err", err)
-		}
+	if _, err := s.SyncFamily(ctx, familyID); err != nil {
+		slog.Warn("账单邮件同步失败", "family", familyID, "err", err)
 	}
 }
 

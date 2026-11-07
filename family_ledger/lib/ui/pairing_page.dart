@@ -6,9 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../auth/auth_store.dart';
-import '../auth/biometric.dart';
 import '../data/remote_api.dart';
 import '../theme/app_theme.dart';
+import 'account_auth_page.dart';
 
 /// 设备配对页：新设备首次使用时不输密码，等家人在后台批准。
 ///
@@ -79,29 +79,6 @@ class _PairingPageState extends State<PairingPage> {
     }
   }
 
-  /// 配对成功后问一次要不要开指纹解锁
-  Future<void> _offerBiometric() async {
-    final available = await BiometricGuard.isAvailable();
-    final enabled = await BiometricGuard.isEnabled();
-    if (!available || enabled || !mounted) return;
-
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('开启指纹解锁？'),
-        content: const Text('以后打开 App 按一下指纹就能进，不用再等家人批准。'),
-        actions: <Widget>[
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('暂不')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('开启')),
-        ],
-      ),
-    );
-    if (ok == true) {
-      final passed = await BiometricGuard.authenticate(reason: '验证一次以开启指纹解锁');
-      if (passed) await BiometricGuard.setEnabled(true);
-    }
-  }
-
   /// 首次部署时要能改服务器地址（App 端不再有登录页承载这个入口）
   Future<void> _editServer() async {
     final current = widget.auth.api.baseUrl;
@@ -163,6 +140,14 @@ class _PairingPageState extends State<PairingPage> {
     return ('Android 设备', 'Android ${Platform.operatingSystemVersion}');
   }
 
+  void _openAuth({required bool register}) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => AccountAuthPage(auth: widget.auth, startWithRegister: register),
+      ),
+    );
+  }
+
   void _startPolling() {
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 2), (_) async {
@@ -190,7 +175,7 @@ class _PairingPageState extends State<PairingPage> {
           return;
         }
         // 先问指纹（此时页面还在），再写入会话切到主界面
-        await _offerBiometric();
+
         if (!mounted) return;
         await widget.auth.applyDeviceSession(access, refresh);
         // 登录成功后由 AppRoot 根据会话状态切到主界面，这里不用手动跳转
@@ -237,6 +222,51 @@ class _PairingPageState extends State<PairingPage> {
                         style: TextStyle(fontSize: 12.5, color: Colors.grey.shade600)),
                   ),
                   const SizedBox(height: 24),
+
+                  // 邀请码是成员加入的主要方式，放在最显眼的位置
+                  Container(
+                    decoration: cardDecoration(context),
+                    padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        const Text('新成员加入这个家庭？',
+                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 4),
+                        Text(
+                          '用邀请码注册即可加入；已有账号可以直接登录。',
+                          style: TextStyle(fontSize: 12.5, color: Colors.grey.shade600),
+                        ),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: <Widget>[
+                            Expanded(
+                              child: FilledButton.icon(
+                                onPressed: () => _openAuth(register: true),
+                                icon: const Icon(Icons.key_outlined, size: 16),
+                                label: const Text('用邀请码注册'),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: () => _openAuth(register: false),
+                                child: const Text('账号登录'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Center(
+                    child: Text(
+                      '或者让家人在管理后台批准这台设备（下方配对码）',
+                      style: TextStyle(fontSize: 11.5, color: Colors.grey.shade500),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
 
                   if (_error != null) ...<Widget>[
                     Container(

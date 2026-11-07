@@ -48,6 +48,11 @@ export async function apiPatch(url: string, body?: unknown) {
   return res.data
 }
 
+export async function apiDelete(url: string) {
+  const res: any = await client.delete(url)
+  return res.data
+}
+
 export function formatTime(ms?: number | null) {
   if (!ms) return '-'
   const d = new Date(ms)

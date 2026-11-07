@@ -2,7 +2,7 @@
   <div class="login-page">
     <el-card class="card" shadow="always">
       <h2 class="title">家庭记账本</h2>
-      <p class="sub">平台管理后台</p>
+      <p class="sub">家庭管理后台</p>
       <el-form @submit.prevent="onSubmit">
         <el-form-item>
           <el-input v-model="account" placeholder="管理员账号" size="large" clearable />
@@ -21,7 +21,7 @@
           登 录
         </el-button>
       </el-form>
-      <p class="hint">仅平台管理员可登录，App 账号无法进入</p>
+      <p class="hint">只允许当前家庭的户主/管理员登录</p>
     </el-card>
   </div>
 </template>

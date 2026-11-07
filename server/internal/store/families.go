@@ -21,6 +21,23 @@ func scanFamily(s rowScanner) (*domain.Family, error) {
 	return &f, nil
 }
 
+// PrimaryFamily 返回系统的唯一家庭。
+//
+// 老库可能残留多个家庭记录，迁移时已软删多余的；这里仍按「创建最早」兜底取一条。
+func (d *DB) PrimaryFamily(ctx context.Context, q Querier) (*domain.Family, error) {
+	return scanFamily(q.QueryRowContext(ctx,
+		`SELECT `+familyColumns+` FROM families WHERE deleted_at IS NULL ORDER BY created_at ASC LIMIT 1`))
+}
+
+// PrimaryFamilyID 单家庭系统的家庭 ID；没有家庭时返回 ErrNotFound。
+func (d *DB) PrimaryFamilyID(ctx context.Context, q Querier) (string, error) {
+	f, err := d.PrimaryFamily(ctx, q)
+	if err != nil {
+		return "", err
+	}
+	return f.ID, nil
+}
+
 func (d *DB) CreateFamily(ctx context.Context, q Querier, f *domain.Family) error {
 	_, err := q.ExecContext(ctx,
 		`INSERT INTO families (`+familyColumns+`) VALUES (?,?,?,?,?,?,?)`,
@@ -31,39 +48,6 @@ func (d *DB) CreateFamily(ctx context.Context, q Querier, f *domain.Family) erro
 func (d *DB) FamilyByID(ctx context.Context, q Querier, id string) (*domain.Family, error) {
 	return scanFamily(q.QueryRowContext(ctx,
 		`SELECT `+familyColumns+` FROM families WHERE id = ? AND deleted_at IS NULL`, id))
-}
-
-// FamilyCard 家庭列表项：带当前用户角色和成员数。
-type FamilyCard struct {
-	domain.Family
-	Role        string
-	MemberCount int
-}
-
-func (d *DB) FamiliesOfUser(ctx context.Context, q Querier, userID string) ([]FamilyCard, error) {
-	rows, err := q.QueryContext(ctx, `
-		SELECT f.id, f.name, f.owner_id, f.currency, f.rev, f.created_at, f.updated_at,
-		       m.role,
-		       (SELECT COUNT(*) FROM family_members mm WHERE mm.family_id = f.id)
-		FROM families f
-		JOIN family_members m ON m.family_id = f.id
-		WHERE m.user_id = ? AND f.deleted_at IS NULL
-		ORDER BY f.created_at ASC`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	out := make([]FamilyCard, 0, 4)
-	for rows.Next() {
-		var c FamilyCard
-		if err := rows.Scan(&c.ID, &c.Name, &c.OwnerID, &c.Currency, &c.Rev,
-			&c.CreatedAt, &c.UpdatedAt, &c.Role, &c.MemberCount); err != nil {
-			return nil, err
-		}
-		out = append(out, c)
-	}
-	return out, rows.Err()
 }
 
 // AddMemberIfAbsent 幂等加入：已经是成员时什么都不做（配对重试、重复批准都不报错）

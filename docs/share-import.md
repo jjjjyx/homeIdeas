@@ -83,4 +83,4 @@ AI 识别可能出错（金额看错、漏掉运费），所以 App **不会直�
 - Android 侧：`MainActivity.kt` 注册 `ACTION_SEND`，用 `ContentResolver` 把分享进来的文件
   复制到应用私有缓存，再通过 MethodChannel（`family_ledger/share`）交给 Dart。
   **没有用第三方分享插件**——它们会把 `text/csv` 当成文本，把「文件路径字符串」当内容传进来，服务端必然解析失败。
-- 后端：`POST /families/{id}/imports/preview` 只解析不入库；`POST /families/{id}/imports/confirm` 才写库。
+- 后端：`POST /api/v1/imports/preview` 只解析不入库；`POST /api/v1/imports/confirm` 才写库。

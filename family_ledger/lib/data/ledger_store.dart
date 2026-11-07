@@ -106,7 +106,7 @@ class LedgerStore extends ChangeNotifier {
   List<Category> categoriesOf(EntryType type) =>
       _categories.where((c) => c.type == type).toList(growable: false);
 
-  /// 绑定家庭后：先读本地缓存，再触发一次同步。
+  /// 绑定唯一家庭后：先读本地缓存，再触发一次同步。
   Future<void> configure(String familyId, String userId) async {
     this.familyId = familyId;
     this.userId = userId;
@@ -174,9 +174,9 @@ class LedgerStore extends ChangeNotifier {
     if (familyId.isEmpty) return;
     try {
       final month = '${selectedMonth.year}-${selectedMonth.month.toString().padLeft(2, '0')}';
-      final data = await api.scopeBreakdown(familyId, month: month);
+      final data = await api.scopeBreakdown(month: month);
       _scope = data;
-      final pending = await api.classifyPending(familyId, minConfidence: 0.7);
+      final pending = await api.classifyPending(minConfidence: 0.7);
       _pendingClassify = (pending['pending_count'] as int?) ?? 0;
       notifyListeners();
     } catch (_) {
@@ -340,19 +340,6 @@ class LedgerStore extends ChangeNotifier {
     );
     await load();
     _scheduleSync();
-  }
-
-  /// 切换家庭：清空缓存后重新同步
-  Future<void> switchFamily(String newFamilyId, String userId) async {
-    await db.clearSyncedData();
-    familyId = newFamilyId;
-    this.userId = userId;
-    _entries = const [];
-    _categories = const [];
-    _accounts = const [];
-    _members = const [];
-    notifyListeners();
-    await configure(newFamilyId, userId);
   }
 
   @override

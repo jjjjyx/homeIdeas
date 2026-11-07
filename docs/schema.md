@@ -1,7 +1,10 @@
-# 数据库 Schema（SQLite）
+# 数据库 Schema（SQLite · 单家庭）
 
 权威定义在 `server/internal/store/migrations/`，启动时自动执行，内嵌在二进制里。
 这里做一份可读的说明。
+
+> **单家庭**：一个部署只有一个有效家庭。`family_id` 作为内部归属和同步版本根保留，
+> 但 API/UI 不再暴露家庭 ID；没有家庭列表、创建/加入/切换家庭。
 
 ## 通用约定
 
@@ -40,7 +43,7 @@ users ──< family_members >── families
 | nickname | TEXT | 家人看到的名字 |
 | avatar_url / phone | TEXT | 预留 |
 | status | INTEGER | 1 正常 / 0 禁用（禁用即吊销全部 refresh token） |
-| is_platform_admin | INTEGER | 1 可登录管理后台 |
+| is_platform_admin | INTEGER | 历史列；权限已改为看 `family_members.role`（owner/admin 可进后台） |
 | created_at / updated_at | INTEGER | 毫秒 |
 
 ### refresh_tokens
@@ -56,16 +59,16 @@ users ──< family_members >── families
 
 | 列 | 说明 |
 |---|---|
-| id / name / owner_id | 家庭 |
+| id / name / owner_id | **唯一家庭** |
 | currency | 默认 CNY |
 | **rev** | 同步版本号，任何成员/分类/账户/账目变更都 +1 |
-| deleted_at | 家庭软删（v2 支持删除家庭） |
+| deleted_at | 老库多余家庭在迁移时软删；正常部署只有一行有效记录 |
 
 ### family_members
 
 | 列 | 说明 |
 |---|---|
-| family_id + user_id | 复合主键 |
+| family_id + user_id | 复合主键（单家庭下 family_id 恒为唯一家庭） |
 | role | `owner` / `admin` / `member` |
 | joined_at | 加入时间 |
 
@@ -76,9 +79,11 @@ users ──< family_members >── families
 | 列 | 说明 |
 |---|---|
 | code | 6 位，去掉 `0/O/1/I` 易混字符，UNIQUE |
-| role | 邀请加入后的角色 |
-| expires_at | 默认 72 小时 |
-| used_by / used_at | 一次性核销；**未使用必须是 NULL**（曾经写成空串导致可无限复用） |
+| role | 注册后的角色（`member` / `admin`） |
+| expires_at | 默认 7 天 |
+| used_by / used_at | 一次性核销；**未使用必须是 NULL** |
+
+> 邀请码是单家庭下成员加入的主要方式；注册时校验 `family_id` 必须是唯一家庭。
 
 ### categories / accounts
 
@@ -116,7 +121,8 @@ users ──< family_members >── families
 
 ### mail_accounts
 
-每个家庭一个账单邮箱：IMAP 服务器、账号、**密码密文**（AES-256-GCM）、`last_uid` 增量游标、启用开关。
+唯一家庭的账单邮箱：IMAP 服务器、账号、**密码密文**（AES-256-GCM）、`last_uid` 增量游标、启用开关。
+单家庭下只有一条记录。
 `extract_password_enc` 只保存「上一次用过的解压码」当兜底——**每一份账单的密码都是独立的**，真正生效的密码在 `mail_messages` 上。
 
 ### mail_messages
@@ -162,6 +168,6 @@ refresh_tokens(user_id)
 | 项 | 估算 |
 |---|---|
 | 单条 transaction（含索引） | ≈ 300 B |
-| 100 家庭 × 2 万笔 | 200 万行 ≈ 700 MB |
+| 单家庭 10 年 × 2 万笔 | 2 万行 ≈ 7 MB |
 | 峰值写入 | 压测实测 ~680 条/秒 |
 | 迁移到 PostgreSQL 的触发点 | 多实例部署、写入 > 50 QPS、单库 > 10 GB |

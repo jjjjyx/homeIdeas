@@ -33,7 +33,7 @@ var (
 	ErrForbidden      = New(3001, http.StatusForbidden, "没有权限执行该操作")
 	ErrNotFound       = New(4001, http.StatusNotFound, "资源不存在")
 	ErrConflict       = New(4002, http.StatusConflict, "资源已存在")
-	ErrInviteRequired = New(4003, http.StatusForbidden, "需要邀请码才能注册")
+	ErrInviteRequired = New(4003, http.StatusForbidden, "需要邀请码才能加入家庭")
 	ErrInviteInvalid  = New(4004, http.StatusBadRequest, "邀请码无效或已过期")
 	ErrLastOwner      = New(4005, http.StatusBadRequest, "家庭至少需要保留一位户主")
 	ErrInternal       = New(5000, http.StatusInternalServerError, "服务器开小差了")

@@ -32,7 +32,7 @@ func (h *Handler) splitTransaction(w http.ResponseWriter, r *http.Request) {
 			CategoryID: l.CategoryID, Note: l.Note,
 		})
 	}
-	result, err := h.ledger.SplitTransaction(r.Context(), r.PathValue("id"), userIDFrom(r.Context()),
+	result, err := h.ledger.SplitTransaction(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()),
 		r.PathValue("tid"), service.SplitInput{Lines: lines})
 	if err != nil {
 		writeError(w, r, err)
@@ -42,7 +42,7 @@ func (h *Handler) splitTransaction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) undoSplit(w http.ResponseWriter, r *http.Request) {
-	err := h.ledger.UndoSplit(r.Context(), r.PathValue("id"), userIDFrom(r.Context()), r.PathValue("tid"))
+	err := h.ledger.UndoSplit(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()), r.PathValue("tid"))
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -51,7 +51,7 @@ func (h *Handler) undoSplit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listSplitChildren(w http.ResponseWriter, r *http.Request) {
-	children, err := h.ledger.ChildTransactions(r.Context(), r.PathValue("id"), userIDFrom(r.Context()), r.PathValue("tid"))
+	children, err := h.ledger.ChildTransactions(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()), r.PathValue("tid"))
 	if err != nil {
 		writeError(w, r, err)
 		return

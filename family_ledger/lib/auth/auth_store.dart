@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 import '../data/ledger_store.dart';
 import '../data/models.dart';
@@ -9,17 +10,16 @@ enum AuthStage {
   /// 启动中，正在读取本地令牌并校验
   loading,
 
-  /// 未登录
+  /// 未登录（或系统尚未初始化）
   loggedOut,
-
-  /// 已登录但还没有选择/加入家庭
-  pickingFamily,
 
   /// 正常使用
   ready,
 }
 
 /// 账号与会话状态：App 的根状态机就是它。
+///
+/// 单家庭系统：登录后必然进入唯一家庭，不再有选择/创建/加入家庭的流程。
 class AuthStore extends ChangeNotifier {
   AuthStore({required this.api, required this.tokens, required this.ledger});
 
@@ -29,38 +29,34 @@ class AuthStore extends ChangeNotifier {
 
   AuthStage stage = AuthStage.loading;
   AppUser? user;
-  List<Family> families = const [];
   Family? currentFamily;
   String? error;
   bool busy = false;
 
+  static const MethodChannel _channel = MethodChannel('family_ledger/share');
+
   bool get isLoggedIn => user != null;
 
-  /// 启动时恢复会话：有令牌就拉一次 /me 校验，并进入上次使用的家庭。
+  /// 启动时恢复会话：有令牌就拉一次 /me 校验，并进入唯一家庭。
   Future<void> bootstrap() async {
     debugPrint("[pair] bootstrap 开始, isLoggedIn=${tokens.isLoggedIn}");
     if (!tokens.isLoggedIn) {
+      // 设备授权是永久的：本机标识被家人批准过，就直接换令牌，不用再配对
+      if (await _tryDeviceLogin()) return;
       stage = AuthStage.loggedOut;
       notifyListeners();
       return;
     }
     try {
-      final (u, fams) = await api.me();
+      final (u, family) = await api.me();
       user = u;
-      families = fams;
       await tokens.saveProfile(nickname: u.nickname, account: u.account);
 
-      final savedId = tokens.familyId;
-      Family? target;
-      for (final f in fams) {
-        if (f.id == savedId) target = f;
-      }
-      if (target == null && fams.length == 1) target = fams.first;
-
-      if (target != null) {
-        await _enter(target);
+      if (family != null) {
+        await _enter(family);
       } else {
-        stage = AuthStage.pickingFamily;
+        error = '系统尚未初始化，请先在管理后台完成初始化';
+        stage = AuthStage.loggedOut;
       }
     } catch (e) {
       // 令牌失效或服务不可用：回到配对页
@@ -68,6 +64,47 @@ class AuthStore extends ChangeNotifier {
       stage = AuthStage.loggedOut;
     }
     notifyListeners();
+  }
+
+  /// 用本机设备标识直接换令牌（授权是永久的），成功后等价于正常登录
+  Future<bool> _tryDeviceLogin() async {
+    final key = await _deviceKey();
+    if (key.isEmpty) return false;
+    try {
+      final session = await api.deviceLogin(key);
+      user = session.user;
+      await tokens.saveSession(
+        accessToken: session.accessToken,
+        refreshToken: session.refreshToken,
+        userId: session.user.id,
+        nickname: session.user.nickname,
+        account: session.user.account,
+      );
+      final (u, family) = await api.me();
+      user = u;
+      await tokens.saveProfile(nickname: u.nickname, account: u.account);
+      if (family == null) {
+        stage = AuthStage.loggedOut;
+        notifyListeners();
+        return false;
+      }
+      await _enter(family);
+      notifyListeners();
+      return true;
+    } catch (e) {
+      debugPrint('[pair] 设备自动登录未通过: $e');
+      return false;
+    }
+  }
+
+  /// 读取本机设备标识（ANDROID_ID，重装不变）
+  Future<String> _deviceKey() async {
+    try {
+      final v = await _channel.invokeMethod<String>('getDeviceId');
+      return v ?? '';
+    } catch (_) {
+      return '';
+    }
   }
 
   Future<void> login(String account, String password) async {
@@ -85,11 +122,12 @@ class AuthStore extends ChangeNotifier {
     }
   }
 
+  /// 用邀请码注册并加入唯一家庭（邀请码是成员加入的主要方式）。
   Future<void> register({
     required String account,
     required String password,
     required String nickname,
-    String inviteCode = '',
+    required String inviteCode,
   }) async {
     busy = true;
     error = null;
@@ -122,6 +160,7 @@ class AuthStore extends ChangeNotifier {
     );
     await bootstrap();
   }
+
   Future<void> _afterAuth(Session session) async {
     user = session.user;
     await tokens.saveSession(
@@ -131,90 +170,20 @@ class AuthStore extends ChangeNotifier {
       nickname: session.user.nickname,
       account: session.user.account,
     );
-    families = await api.families();
-    if (families.length == 1) {
-      await _enter(families.first);
-    } else {
-      error = null;
-      stage = AuthStage.pickingFamily;
+    final (_, family) = await api.me();
+    if (family == null) {
+      error = '系统尚未初始化，请先在管理后台完成初始化';
+      stage = AuthStage.loggedOut;
+      return;
     }
+    await _enter(family);
   }
 
   Future<void> _enter(Family family) async {
-    // 切换家庭时必须清空本地缓存：categories/accounts/members 表不带 family_id，
-    // 不清会和新家庭的数据混在一起。
-    final changing = currentFamily != null && currentFamily!.id != family.id;
     currentFamily = family;
-    await tokens.saveFamily(family.id);
-    if (changing) {
-      await ledger.switchFamily(family.id, user?.id ?? '');
-    } else {
-      await ledger.configure(family.id, user?.id ?? '');
-    }
+    await ledger.configure(family.id, user?.id ?? '');
+    error = null;
     stage = AuthStage.ready;
-  }
-
-  Future<void> selectFamily(Family family) async {
-    busy = true;
-    notifyListeners();
-    try {
-      await _enter(family);
-    } finally {
-      busy = false;
-      notifyListeners();
-    }
-  }
-
-  Future<bool> createFamily(String name) async {
-    busy = true;
-    error = null;
-    notifyListeners();
-    try {
-      final family = await api.createFamily(name.trim());
-      families = [...families, family];
-      await _enter(family);
-      return true;
-    } catch (e) {
-      error = e is ApiException ? e.message : '$e';
-      return false;
-    } finally {
-      busy = false;
-      notifyListeners();
-    }
-  }
-
-  Future<bool> joinFamily(String code) async {
-    busy = true;
-    error = null;
-    notifyListeners();
-    try {
-      final family = await api.joinFamily(code.trim().toUpperCase());
-      final exists = families.any((f) => f.id == family.id);
-      if (!exists) families = [...families, family];
-      await _enter(family);
-      return true;
-    } catch (e) {
-      error = e is ApiException ? e.message : '$e';
-      return false;
-    } finally {
-      busy = false;
-      notifyListeners();
-    }
-  }
-
-  Future<void> refreshFamilies() async {
-    try {
-      families = await api.families();
-      notifyListeners();
-    } catch (_) {
-      // 忽略，下次再试
-    }
-  }
-
-  /// 从设置页回到家庭选择
-  void openFamilyPicker() {
-    stage = AuthStage.pickingFamily;
-    notifyListeners();
   }
 
   Future<void> logout() async {
@@ -225,7 +194,6 @@ class AuthStore extends ChangeNotifier {
     await tokens.clear();
     await ledger.db.clearSyncedData();
     user = null;
-    families = const [];
     currentFamily = null;
     stage = AuthStage.loggedOut;
     notifyListeners();

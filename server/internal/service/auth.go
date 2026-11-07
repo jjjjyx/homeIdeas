@@ -32,10 +32,13 @@ func NewAuthService(db *store.DB, cfg *config.Config) *AuthService {
 }
 
 type RegisterInput struct {
-	Account    string
-	Password   string
-	Nickname   string
+	Account  string
+	Password string
+	Nickname string
+	// InviteCode 加入唯一家庭的邀请码。首个用户（初始化）可省略。
 	InviteCode string
+	// FamilyName 仅首次初始化时使用；之后系统只围绕唯一家庭运行。
+	FamilyName string
 	Device     string
 	IP         string
 }
@@ -52,12 +55,18 @@ type Session struct {
 	UserID       string
 	Account      string
 	Nickname     string
+	Role         string
 	IsAdmin      bool
 	AccessToken  string
 	ExpiresIn    int64
 	RefreshToken string
 }
 
+// Register 注册并加入唯一家庭。
+//
+//   - 系统还没有用户：免邀请码，创建唯一家庭和户主账号；
+//   - 之后：必须提供有效邀请码（或服务端开启 ALLOW_PUBLIC_REGISTER），
+//     以邀请码上的角色加入同一个家庭。
 func (s *AuthService) Register(ctx context.Context, in RegisterInput) (*Session, error) {
 	account := strings.ToLower(strings.TrimSpace(in.Account))
 	if !accountPattern.MatchString(account) {
@@ -73,6 +82,13 @@ func (s *AuthService) Register(ctx context.Context, in RegisterInput) (*Session,
 	if utf8.RuneCountInString(nickname) > 20 {
 		return nil, domain.ErrBadRequest.WithMessage("昵称最多 20 个字")
 	}
+	familyName := strings.TrimSpace(in.FamilyName)
+	if familyName == "" {
+		familyName = "我的家"
+	}
+	if utf8.RuneCountInString(familyName) > 20 {
+		return nil, domain.ErrBadRequest.WithMessage("家庭名称需为 1-20 个字")
+	}
 
 	// 密码哈希放在事务外，避免 bcrypt 期间占住唯一的数据库连接。
 	hash, err := pw.Hash(in.Password)
@@ -81,34 +97,37 @@ func (s *AuthService) Register(ctx context.Context, in RegisterInput) (*Session,
 	}
 
 	now := store.NowMS()
-	newUserID := id.New()
+	userID := id.New()
 	var joinedFamilyID string
-	var isFirstUser bool
 
 	err = s.db.WithTx(ctx, func(tx *sql.Tx) error {
-		if _, err := s.db.UserByAccount(ctx, tx, account); err == nil {
-			return domain.ErrConflict.WithMessage("账号已被占用")
-		} else if !errors.Is(err, domain.ErrNotFound) {
-			return err
-		}
-
 		total, err := s.db.CountUsers(ctx, tx)
 		if err != nil {
 			return err
 		}
-		// 库里第一个用户是引导账号：免邀请码，并自动成为平台管理员。
-		isFirstUser = total == 0
+		isFirstUser := total == 0
 
-		inviteCode := strings.TrimSpace(in.InviteCode)
+		var family *domain.Family
 		var invite *domain.Invite
+		role := domain.RoleMember
+
 		if !isFirstUser {
-			if inviteCode == "" {
-				if !s.cfg.AllowPublicRegister {
-					return domain.ErrInviteRequired
+			f, err := s.db.PrimaryFamily(ctx, tx)
+			if err != nil {
+				if errors.Is(err, domain.ErrNotFound) {
+					return domain.ErrForbidden.WithMessage("系统尚未初始化")
 				}
-			} else {
-				inv, err := s.db.InviteByCode(ctx, tx, inviteCode)
+				return err
+			}
+			family = f
+
+			code := strings.ToUpper(strings.TrimSpace(in.InviteCode))
+			if code != "" {
+				inv, err := s.db.InviteByCode(ctx, tx, code)
 				if err != nil {
+					return domain.ErrInviteInvalid
+				}
+				if inv.FamilyID != family.ID {
 					return domain.ErrInviteInvalid
 				}
 				if inv.UsedBy != "" {
@@ -118,33 +137,76 @@ func (s *AuthService) Register(ctx context.Context, in RegisterInput) (*Session,
 					return domain.ErrInviteInvalid.WithMessage("邀请码已过期")
 				}
 				invite = inv
+				if inv.Role == domain.RoleAdmin {
+					role = domain.RoleAdmin
+				}
+			} else if !s.cfg.AllowPublicRegister {
+				return domain.ErrInviteRequired
 			}
 		}
 
+		if _, err := s.db.UserByAccount(ctx, tx, account); err == nil {
+			return domain.ErrConflict.WithMessage("账号已被占用")
+		} else if !errors.Is(err, domain.ErrNotFound) {
+			return err
+		}
+
 		user := &domain.User{
-			ID:              newUserID,
-			Account:         account,
-			PasswordHash:    hash,
-			Nickname:        nickname,
-			Status:          1,
-			IsPlatformAdmin: isFirstUser,
-			CreatedAt:       now,
-			UpdatedAt:       now,
+			ID:           userID,
+			Account:      account,
+			PasswordHash: hash,
+			Nickname:     nickname,
+			Status:       1,
+			CreatedAt:    now,
+			UpdatedAt:    now,
 		}
 		if err := s.db.CreateUser(ctx, tx, user); err != nil {
 			return err
 		}
 
-		if invite != nil {
-			if err := s.joinFamilyTx(ctx, tx, invite, newUserID, now); err != nil {
+		if isFirstUser {
+			family = &domain.Family{
+				ID: id.New(), Name: familyName, OwnerID: userID, Currency: "CNY",
+				CreatedAt: now, UpdatedAt: now,
+			}
+			if err := s.db.CreateFamily(ctx, tx, family); err != nil {
 				return err
 			}
-			joinedFamilyID = invite.FamilyID
+			if err := s.db.AddMember(ctx, tx, family.ID, userID, domain.RoleOwner, now); err != nil {
+				return err
+			}
+			rev, err := s.db.BumpRev(ctx, tx, family.ID, now)
+			if err != nil {
+				return err
+			}
+			if err := s.db.SeedDefaultCategories(ctx, tx, family.ID, rev, now); err != nil {
+				return err
+			}
+			if err := s.db.SeedDefaultAccounts(ctx, tx, family.ID, rev, now); err != nil {
+				return err
+			}
+		} else {
+			if invite != nil {
+				used, err := s.db.MarkInviteUsed(ctx, tx, invite.ID, userID, now)
+				if err != nil {
+					return err
+				}
+				if !used {
+					return domain.ErrInviteInvalid.WithMessage("邀请码已被使用")
+				}
+			}
+			if err := s.db.AddMember(ctx, tx, family.ID, userID, role, now); err != nil {
+				return err
+			}
+			if _, err := s.db.BumpRev(ctx, tx, family.ID, now); err != nil {
+				return err
+			}
 		}
+		joinedFamilyID = family.ID
 
 		return s.db.AddAudit(ctx, tx, &domain.AuditLog{
 			FamilyID: joinedFamilyID,
-			UserID:   newUserID,
+			UserID:   userID,
 			Action:   "auth.register",
 			Detail:   "account=" + account,
 			IP:       in.IP,
@@ -154,38 +216,9 @@ func (s *AuthService) Register(ctx context.Context, in RegisterInput) (*Session,
 		return nil, err
 	}
 
-	session, err := s.issueSession(ctx, &domain.User{
-		ID:              newUserID,
-		Account:         account,
-		Nickname:        nickname,
-		IsPlatformAdmin: isFirstUser,
+	return s.issueSession(ctx, &domain.User{
+		ID: userID, Account: account, Nickname: nickname,
 	}, in.Device)
-	if err != nil {
-		return nil, err
-	}
-	return session, nil
-}
-
-// joinFamilyTx 把新用户加入邀请码对应的家庭，并核销邀请码。
-// 先核销再加入：核销是带条件的原子更新，并发下只有一个能成功。
-func (s *AuthService) joinFamilyTx(ctx context.Context, tx *sql.Tx, inv *domain.Invite, userID string, now int64) error {
-	used, err := s.db.MarkInviteUsed(ctx, tx, inv.ID, userID, now)
-	if err != nil {
-		return err
-	}
-	if !used {
-		return domain.ErrInviteInvalid.WithMessage("邀请码已被使用")
-	}
-
-	role := inv.Role
-	if role != domain.RoleAdmin && role != domain.RoleMember {
-		role = domain.RoleMember
-	}
-	if err := s.db.AddMember(ctx, tx, inv.FamilyID, userID, role, now); err != nil {
-		return err
-	}
-	_, err = s.db.BumpRev(ctx, tx, inv.FamilyID, now)
-	return err
 }
 
 func (s *AuthService) Login(ctx context.Context, in LoginInput) (*Session, error) {
@@ -236,11 +269,13 @@ func (s *AuthService) issueSession(ctx context.Context, user *domain.User, devic
 	if err := s.db.CreateRefreshToken(ctx, s.db.SQL(), token); err != nil {
 		return nil, err
 	}
+	role := s.roleOf(ctx, user.ID)
 	return &Session{
 		UserID:       user.ID,
 		Account:      user.Account,
 		Nickname:     user.Nickname,
-		IsAdmin:      user.IsPlatformAdmin,
+		Role:         role,
+		IsAdmin:      role == domain.RoleOwner || role == domain.RoleAdmin,
 		AccessToken:  access,
 		ExpiresIn:    int64(s.cfg.AccessTTL.Seconds()),
 		RefreshToken: refreshPlain,
@@ -270,15 +305,30 @@ func (s *AuthService) Refresh(ctx context.Context, refreshPlain string) (*Sessio
 	if err != nil {
 		return nil, err
 	}
+	role := s.roleOf(ctx, user.ID)
 	return &Session{
 		UserID:       user.ID,
 		Account:      user.Account,
 		Nickname:     user.Nickname,
-		IsAdmin:      user.IsPlatformAdmin,
+		Role:         role,
+		IsAdmin:      role == domain.RoleOwner || role == domain.RoleAdmin,
 		AccessToken:  access,
 		ExpiresIn:    int64(s.cfg.AccessTTL.Seconds()),
 		RefreshToken: refreshPlain,
 	}, nil
+}
+
+// roleOf 返回用户在当前唯一家庭里的角色；没有家庭或不是成员时返回空串。
+func (s *AuthService) roleOf(ctx context.Context, userID string) string {
+	familyID, err := s.db.PrimaryFamilyID(ctx, s.db.SQL())
+	if err != nil {
+		return ""
+	}
+	m, err := s.db.MemberOf(ctx, s.db.SQL(), familyID, userID)
+	if err != nil {
+		return ""
+	}
+	return m.Role
 }
 
 func (s *AuthService) Logout(ctx context.Context, refreshPlain string) error {

@@ -12,10 +12,9 @@ import '../theme/app_theme.dart';
 /// - 一次操作 = 这个商户的所有账目 + 记住这条规则
 /// - 看不到「家庭/个人」的判断依据时不敢点，所以展示 AI 的理由和置信度
 class ClassifyReviewPage extends StatefulWidget {
-  const ClassifyReviewPage({super.key, required this.api, required this.familyId, required this.categories});
+  const ClassifyReviewPage({super.key, required this.api, required this.categories});
 
   final RemoteApi api;
-  final String familyId;
   final List<Category> categories;
 
   @override
@@ -31,7 +30,6 @@ class _ClassifyReviewPageState extends State<ClassifyReviewPage> {
   List<Map<String, dynamic>> _merchants = const <Map<String, dynamic>>[];
 
   RemoteApi get _api => widget.api;
-  String? get _familyId => widget.familyId.isEmpty ? null : widget.familyId;
 
   List<Category> get _expenseCategories =>
       widget.categories.where((c) => c.type == EntryType.expense).toList();
@@ -43,13 +41,8 @@ class _ClassifyReviewPageState extends State<ClassifyReviewPage> {
   }
 
   Future<void> _load() async {
-    final fid = _familyId;
-    if (fid == null) {
-      setState(() => _loading = false);
-      return;
-    }
     try {
-      final data = await _api.classifyPending(fid, minConfidence: 0.7);
+      final data = await _api.classifyPending(minConfidence: 0.7);
       if (!mounted) return;
       setState(() {
         _items = (data['items'] as List<dynamic>? ?? <dynamic>[])
@@ -79,8 +72,6 @@ class _ClassifyReviewPageState extends State<ClassifyReviewPage> {
   }
 
   Future<void> _assign(String merchant, String scope, Category category) async {
-    final fid = _familyId;
-    if (fid == null) return;
     final targets = _itemsOf(merchant);
     if (targets.isEmpty) return;
 
@@ -89,7 +80,6 @@ class _ClassifyReviewPageState extends State<ClassifyReviewPage> {
     try {
       for (final item in targets) {
         await _api.reviewTransaction(
-          fid,
           item['id'] as String,
           scope: scope,
           categoryId: category.id,

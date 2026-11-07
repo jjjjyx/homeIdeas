@@ -137,59 +137,50 @@ func (d *DB) CategoryBelongsToFamily(ctx context.Context, q Querier, categoryID,
 	return n > 0, err
 }
 
-// EnsureDefaultCategories 给所有家庭补齐缺失的预置分类。
+// EnsureDefaultCategories 给唯一家庭补齐缺失的预置分类。
 // 老家庭是在「通讯/保险」加入之前创建的，启动时补一次即可（幂等）。
 func (d *DB) EnsureDefaultCategories(ctx context.Context, now int64) error {
-	rows, err := d.SQL().QueryContext(ctx, `SELECT id FROM families WHERE deleted_at IS NULL`)
+	family, err := d.PrimaryFamily(ctx, d.SQL())
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return nil // 还没初始化，等首次注册时再种
+		}
+		return err
+	}
+
+	existing := map[string]bool{}
+	nameRows, err := d.SQL().QueryContext(ctx,
+		`SELECT name FROM categories WHERE family_id = ? AND deleted_at IS NULL`, family.ID)
 	if err != nil {
 		return err
 	}
-	familyIDs := make([]string, 0, 8)
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
+	for nameRows.Next() {
+		var name string
+		if err := nameRows.Scan(&name); err != nil {
+			nameRows.Close()
 			return err
 		}
-		familyIDs = append(familyIDs, id)
+		existing[name] = true
 	}
-	rows.Close()
+	nameRows.Close()
 
-	for _, familyID := range familyIDs {
-		existing := map[string]bool{}
-		nameRows, err := d.SQL().QueryContext(ctx,
-			`SELECT name FROM categories WHERE family_id = ? AND deleted_at IS NULL`, familyID)
-		if err != nil {
-			return err
+	for i, c := range defaultCategories {
+		if existing[c.Name] {
+			continue
 		}
-		for nameRows.Next() {
-			var name string
-			if err := nameRows.Scan(&name); err != nil {
-				nameRows.Close()
-				return err
-			}
-			existing[name] = true
-		}
-		nameRows.Close()
-
-		for i, c := range defaultCategories {
-			if existing[c.Name] {
-				continue
-			}
-			err := d.WithTx(ctx, func(tx *sql.Tx) error {
-				rev, err := d.BumpRev(ctx, tx, familyID, now)
-				if err != nil {
-					return err
-				}
-				_, err = tx.ExecContext(ctx, `
-					INSERT INTO categories (id, family_id, name, type, icon_key, color, sort_order, is_system, rev, created_at, updated_at)
-					VALUES (?,?,?,?,?,?,?,1,?,?,?)`,
-					id.New(), familyID, c.Name, c.Type, c.Icon, c.Color, i, rev, now, now)
-				return err
-			})
+		err := d.WithTx(ctx, func(tx *sql.Tx) error {
+			rev, err := d.BumpRev(ctx, tx, family.ID, now)
 			if err != nil {
 				return err
 			}
+			_, err = tx.ExecContext(ctx, `
+				INSERT INTO categories (id, family_id, name, type, icon_key, color, sort_order, is_system, rev, created_at, updated_at)
+				VALUES (?,?,?,?,?,?,?,1,?,?,?)`,
+				id.New(), family.ID, c.Name, c.Type, c.Icon, c.Color, i, rev, now, now)
+			return err
+		})
+		if err != nil {
+			return err
 		}
 	}
 	return nil

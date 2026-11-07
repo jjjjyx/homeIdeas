@@ -11,7 +11,6 @@ import (
 
 type txResp struct {
 	ID          string `json:"id"`
-	FamilyID    string `json:"family_id"`
 	Type        int    `json:"type"`
 	AmountCents int64  `json:"amount_cents"`
 	CategoryID  string `json:"category_id"`
@@ -41,7 +40,7 @@ type txResp struct {
 
 func toTxResp(t domain.Transaction) txResp {
 	return txResp{
-		ID: t.ID, FamilyID: t.FamilyID, Type: t.Type, AmountCents: t.AmountCents,
+		ID: t.ID, Type: t.Type, AmountCents: t.AmountCents,
 		CategoryID: t.CategoryID, AccountID: t.AccountID, MemberID: t.MemberID,
 		OccurredAt: t.OccurredAt, Note: t.Note, Visibility: t.Visibility,
 		Tags: t.Tags, Rev: t.Rev, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt,
@@ -102,7 +101,7 @@ func (h *Handler) createTransaction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	tx, err := h.ledger.Create(r.Context(), r.PathValue("id"), userIDFrom(r.Context()), req.toInput())
+	tx, err := h.ledger.Create(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()), req.toInput())
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -126,7 +125,7 @@ func (h *Handler) listTransactions(w http.ResponseWriter, r *http.Request) {
 			opt.Type = &t
 		}
 	}
-	list, err := h.ledger.List(r.Context(), r.PathValue("id"), userIDFrom(r.Context()), opt)
+	list, err := h.ledger.List(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()), opt)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -144,7 +143,7 @@ func (h *Handler) updateTransaction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	tx, err := h.ledger.Update(r.Context(), r.PathValue("id"), userIDFrom(r.Context()), r.PathValue("tid"), req.toInput())
+	tx, err := h.ledger.Update(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()), r.PathValue("tid"), req.toInput())
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -153,7 +152,7 @@ func (h *Handler) updateTransaction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) deleteTransaction(w http.ResponseWriter, r *http.Request) {
-	if err := h.ledger.Delete(r.Context(), r.PathValue("id"), userIDFrom(r.Context()), r.PathValue("tid")); err != nil {
+	if err := h.ledger.Delete(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()), r.PathValue("tid")); err != nil {
 		writeError(w, r, err)
 		return
 	}
@@ -167,7 +166,7 @@ func (h *Handler) syncPull(w http.ResponseWriter, r *http.Request) {
 	since := int64(parseInt(q.Get("since"), 0))
 	limit := parseInt(q.Get("limit"), 500)
 
-	res, err := h.ledger.Pull(r.Context(), r.PathValue("id"), userIDFrom(r.Context()), since, limit)
+	res, err := h.ledger.Pull(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()), since, limit)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -244,7 +243,7 @@ func (h *Handler) syncPush(w http.ResponseWriter, r *http.Request) {
 			Payload:    op.Payload.toInput(),
 		})
 	}
-	results, err := h.ledger.Push(r.Context(), r.PathValue("id"), userIDFrom(r.Context()), ops)
+	results, err := h.ledger.Push(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()), ops)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -266,7 +265,7 @@ func (h *Handler) syncPush(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 推送后直接给出最新游标，客户端可以省一次 pull
-	pull, err := h.ledger.Pull(r.Context(), r.PathValue("id"), userIDFrom(r.Context()), 0, 1)
+	pull, err := h.ledger.Pull(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()), 0, 1)
 	cursor := int64(0)
 	if err == nil {
 		cursor = pull.Cursor
@@ -277,7 +276,7 @@ func (h *Handler) syncPush(w http.ResponseWriter, r *http.Request) {
 // ---------- 统计 ----------
 
 func (h *Handler) statsSummary(w http.ResponseWriter, r *http.Request) {
-	summary, err := h.ledger.Summary(r.Context(), r.PathValue("id"), userIDFrom(r.Context()), r.URL.Query().Get("month"))
+	summary, err := h.ledger.Summary(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()), r.URL.Query().Get("month"))
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -294,7 +293,7 @@ func (h *Handler) statsSummary(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) statsCategories(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	typ := parseInt(q.Get("type"), domain.TypeExpense)
-	stats, err := h.ledger.CategoryStats(r.Context(), r.PathValue("id"), userIDFrom(r.Context()), q.Get("month"), typ)
+	stats, err := h.ledger.CategoryStats(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()), q.Get("month"), typ)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -320,7 +319,7 @@ func (h *Handler) statsTrend(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	months := parseInt(q.Get("months"), 6)
 	typ := parseInt(q.Get("type"), domain.TypeExpense)
-	points, err := h.ledger.Trend(r.Context(), r.PathValue("id"), userIDFrom(r.Context()), months, typ)
+	points, err := h.ledger.Trend(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()), months, typ)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -362,7 +361,7 @@ func parseMS(s string) int64 {
 }
 
 func (h *Handler) statsScopes(w http.ResponseWriter, r *http.Request) {
-	data, err := h.ledger.ScopeBreakdown(r.Context(), r.PathValue("id"), userIDFrom(r.Context()),
+	data, err := h.ledger.ScopeBreakdown(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()),
 		r.URL.Query().Get("month"))
 	if err != nil {
 		writeError(w, r, err)

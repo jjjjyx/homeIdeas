@@ -1,16 +1,17 @@
 # homeIdeas 工作区
 
-本目录用于家庭记账本 App 的开发。环境已于本机一次性配好，之后的项目都可以直接复用。
+本目录用于家庭记账本 App 的开发。**一个部署只服务一个家庭**：没有家庭列表/创建/加入/切换，
+成员通过邀请码注册（或管理员后台创建）加入唯一家庭。
 
 ## 目录
 
 ```
 homeIdeas/
-├── server/              Go 后端（认证 + 家庭 + 账本 + 同步 + 管理接口）
+├── server/              Go 后端（认证 + 家庭 + 邀请码 + 账本 + 同步 + 管理接口）
 ├── admin/               Vue3 管理后台（构建产物 embed 进 Go 二进制）
-├── family_ledger/       Flutter App（已接入后端：登录 / 家庭 / 离线记账 / 增量同步）
+├── family_ledger/       Flutter App（设备配对 / 邀请码注册 / 离线记账 / 增量同步）
 └── docs/
-    ├── architecture.md  架构设计
+    ├── architecture.md  架构设计（单家庭）
     ├── api-v1.md        接口契约
     └── schema.md        数据库表结构说明
 ```

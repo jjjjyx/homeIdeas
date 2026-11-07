@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"net/http"
+
+	"family-ledger/server/internal/domain"
 )
 
 type adminSessionResp struct {
@@ -30,110 +32,109 @@ func (h *Handler) adminLogin(w http.ResponseWriter, r *http.Request) {
 		AccessToken: session.AccessToken,
 		ExpiresIn:   session.ExpiresIn,
 		User: userResp{
-			ID: session.UserID, Account: session.Account,
-			Nickname: session.Nickname, IsPlatformAdmin: true,
+			ID: session.UserID, Account: session.Account, Nickname: session.Nickname,
+			Role: session.Role, IsPlatformAdmin: true,
 		},
 	})
 }
 
 func (h *Handler) adminMe(w http.ResponseWriter, r *http.Request) {
-	user, err := h.admin.VerifyAdmin(r.Context(), userIDFrom(r.Context()))
+	uid := userIDFrom(r.Context())
+	user, err := h.admin.VerifyAdmin(r.Context(), uid)
 	if err != nil {
 		writeError(w, r, err)
 		return
 	}
-	writeData(w, r, map[string]any{"user": toUserResp(user)})
+	writeData(w, r, map[string]any{"user": toUserResp(user, h.admin.RoleOf(r.Context(), uid))})
 }
 
+// adminOverview 单家庭概览：家庭信息 + 成员/账目/支出汇总。
 func (h *Handler) adminOverview(w http.ResponseWriter, r *http.Request) {
 	o, err := h.admin.Overview(r.Context())
 	if err != nil {
 		writeError(w, r, err)
 		return
 	}
+	var family any
+	if o.Family != nil {
+		family = toFamilyResp(o.Family, h.admin.RoleOf(r.Context(), userIDFrom(r.Context())), o.Members)
+	}
 	writeData(w, r, map[string]any{
-		"users":               o.Users,
-		"families":            o.Families,
-		"transactions":        o.Transactions,
-		"expense_total_cents": o.AmountCents,
-		"new_users_today":     o.NewUsersToday,
-		"new_tx_today":        o.NewTxToday,
+		"family":              family,
+		"members":             o.Members,
+		"transactions":        o.Txs,
+		"expense_total_cents": o.Amount,
+		"new_tx_today":        o.NewTx,
+		"new_users_today":     o.NewUsers,
 	})
 }
 
-type adminUserResp struct {
-	ID          string `json:"id"`
-	Account     string `json:"account"`
-	Nickname    string `json:"nickname"`
-	Status      int    `json:"status"`
-	IsAdmin     bool   `json:"is_platform_admin"`
-	FamilyCount int    `json:"family_count"`
-	CreatedAt   int64  `json:"created_at"`
+type adminMemberResp struct {
+	ID        string `json:"id"`
+	Account   string `json:"account"`
+	Nickname  string `json:"nickname"`
+	Role      string `json:"role"`
+	Status    int    `json:"status"`
+	JoinedAt  int64  `json:"joined_at"`
+	CreatedAt int64  `json:"created_at"`
 }
 
-func (h *Handler) adminUsers(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) adminMembers(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	rows, total, err := h.admin.Users(r.Context(), q.Get("q"),
+	rows, total, err := h.admin.Members(r.Context(), q.Get("q"),
 		parseInt(q.Get("page"), 1), parseInt(q.Get("page_size"), 20))
 	if err != nil {
 		writeError(w, r, err)
 		return
 	}
-	items := make([]adminUserResp, 0, len(rows))
-	for _, u := range rows {
-		items = append(items, adminUserResp{
-			ID: u.ID, Account: u.Account, Nickname: u.Nickname, Status: u.Status,
-			IsAdmin: u.IsPlatformAdmin, FamilyCount: u.FamilyCount, CreatedAt: u.CreatedAt,
+	items := make([]adminMemberResp, 0, len(rows))
+	for _, m := range rows {
+		items = append(items, adminMemberResp{
+			ID: m.UserID, Account: m.Account, Nickname: m.Nickname, Role: m.Role,
+			Status: m.Status, JoinedAt: m.JoinedAt, CreatedAt: m.CreatedAt,
 		})
 	}
 	writeData(w, r, map[string]any{"items": items, "total": total})
 }
 
-type adminSetStatusReq struct {
-	Status int `json:"status"`
+type adminUpdateMemberReq struct {
+	Role     *string `json:"role"`
+	Status   *int    `json:"status"`
+	Password string  `json:"password"`
 }
 
-func (h *Handler) adminSetUserStatus(w http.ResponseWriter, r *http.Request) {
-	var req adminSetStatusReq
+// adminUpdateMember 一个接口处理改角色、封禁/解封、重置密码。
+func (h *Handler) adminUpdateMember(w http.ResponseWriter, r *http.Request) {
+	var req adminUpdateMemberReq
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, r, err)
 		return
 	}
-	if err := h.admin.SetUserStatus(r.Context(), userIDFrom(r.Context()), r.PathValue("uid"), req.Status, clientIP(r)); err != nil {
-		writeError(w, r, err)
+	if req.Role == nil && req.Status == nil && req.Password == "" {
+		writeError(w, r, domain.ErrBadRequest.WithMessage("没有要修改的内容"))
 		return
+	}
+	uid := r.PathValue("uid")
+	actor := userIDFrom(r.Context())
+	if req.Role != nil {
+		if err := h.families.SetRole(r.Context(), actor, uid, *req.Role); err != nil {
+			writeError(w, r, err)
+			return
+		}
+	}
+	if req.Status != nil {
+		if err := h.admin.SetUserStatus(r.Context(), actor, uid, *req.Status, clientIP(r)); err != nil {
+			writeError(w, r, err)
+			return
+		}
+	}
+	if req.Password != "" {
+		if err := h.admin.ResetPassword(r.Context(), actor, uid, req.Password, clientIP(r)); err != nil {
+			writeError(w, r, err)
+			return
+		}
 	}
 	writeMessage(w, r, "已更新")
-}
-
-type adminFamilyResp struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	OwnerID          string `json:"owner_id"`
-	OwnerNickname    string `json:"owner_nickname"`
-	MemberCount      int    `json:"member_count"`
-	TransactionCount int    `json:"transaction_count"`
-	Rev              int64  `json:"rev"`
-	CreatedAt        int64  `json:"created_at"`
-}
-
-func (h *Handler) adminFamilies(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	rows, total, err := h.admin.Families(r.Context(), q.Get("q"),
-		parseInt(q.Get("page"), 1), parseInt(q.Get("page_size"), 20))
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
-	items := make([]adminFamilyResp, 0, len(rows))
-	for _, f := range rows {
-		items = append(items, adminFamilyResp{
-			ID: f.ID, Name: f.Name, OwnerID: f.OwnerID, OwnerNickname: f.OwnerNickname,
-			MemberCount: f.MemberCount, TransactionCount: f.TransactionCount,
-			Rev: f.Rev, CreatedAt: f.CreatedAt,
-		})
-	}
-	writeData(w, r, map[string]any{"items": items, "total": total})
 }
 
 type adminTxResp struct {
@@ -142,9 +143,9 @@ type adminTxResp struct {
 	MemberName   string `json:"member_name"`
 }
 
-func (h *Handler) adminFamilyTransactions(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) adminTransactions(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	rows, err := h.admin.FamilyTransactions(r.Context(), r.PathValue("id"),
+	rows, total, err := h.admin.Transactions(r.Context(),
 		parseInt(q.Get("page"), 1), parseInt(q.Get("page_size"), 50))
 	if err != nil {
 		writeError(w, r, err)
@@ -158,7 +159,7 @@ func (h *Handler) adminFamilyTransactions(w http.ResponseWriter, r *http.Request
 			MemberName:   t.MemberName,
 		})
 	}
-	writeData(w, r, map[string]any{"items": items})
+	writeData(w, r, map[string]any{"items": items, "total": total})
 }
 
 type adminAuditResp struct {
@@ -166,7 +167,6 @@ type adminAuditResp struct {
 	Action     string `json:"action"`
 	UserID     string `json:"user_id"`
 	Nickname   string `json:"nickname"`
-	FamilyID   string `json:"family_id"`
 	TargetType string `json:"target_type"`
 	TargetID   string `json:"target_id"`
 	Detail     string `json:"detail"`
@@ -186,7 +186,7 @@ func (h *Handler) adminAuditLogs(w http.ResponseWriter, r *http.Request) {
 	for _, a := range rows {
 		items = append(items, adminAuditResp{
 			ID: a.ID, Action: a.Action, UserID: a.UserID, Nickname: a.Nickname,
-			FamilyID: a.FamilyID, TargetType: a.TargetType, TargetID: a.TargetID,
+			TargetType: a.TargetType, TargetID: a.TargetID,
 			Detail: a.Detail, IP: a.IP, CreatedAt: a.CreatedAt,
 		})
 	}

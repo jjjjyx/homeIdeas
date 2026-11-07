@@ -4,7 +4,6 @@ import 'package:flutter/services.dart';
 import '../auth/auth_store.dart';
 import '../auth/biometric.dart';
 import '../data/ledger_store.dart';
-import '../data/remote_api.dart';
 import '../theme/app_theme.dart';
 import 'classify_review_page.dart';
 import 'mail_config_page.dart';
@@ -58,7 +57,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (!mounted) return;
     setState(() => _biometricEnabled = value);
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(value ? '已开启，下次打开用指纹解锁' : '已关闭指纹解锁')),
+      SnackBar(content: Text(value ? '已开启，之后每次进入 App 都要验证指纹' : '已关闭启动验证')),
     );
   }
 
@@ -120,10 +119,8 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _invite(BuildContext context) async {
-    final family = auth.currentFamily;
-    if (family == null) return;
     try {
-      final code = await auth.api.createInvite(family.id);
+      final code = await auth.api.createInvite();
       if (!context.mounted) return;
       await showDialog<void>(
         context: context,
@@ -142,7 +139,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const SizedBox(height: 8),
               Text(
-                '72 小时内有效，仅可使用一次',
+                '72 小时内有效，仅可使用一次。\n家人在 App 启动页点「已有账号 / 用邀请码登录」→「用邀请码注册」。',
                 style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
               ),
             ],
@@ -170,7 +167,7 @@ class _SettingsPageState extends State<SettingsPage> {
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e is ApiException ? e.message : '$e')),
+        SnackBar(content: Text('生成邀请码失败：$e')),
       );
     }
   }
@@ -277,6 +274,14 @@ class _SettingsPageState extends State<SettingsPage> {
                           label: const Text('邀请成员'),
                         ),
                       ),
+                    if (family?.canManage ?? false)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Text(
+                          '也可以直接在管理后台「家庭成员」里创建账号',
+                          style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -348,9 +353,11 @@ class _SettingsPageState extends State<SettingsPage> {
                     if (_biometricAvailable)
                       SwitchListTile(
                         secondary: const Icon(Icons.fingerprint, size: 22),
-                        title: const Text('指纹/面容解锁'),
+                        title: const Text('启动验证'),
                         subtitle: Text(
-                          _biometricEnabled ? '已开启，下次打开用指纹解锁' : '开启后不用每次输密码',
+                          _biometricEnabled
+                              ? '已开启：每次进入 App 都要验证指纹'
+                              : '开启后，每次进入 App 需验证指纹',
                           style: const TextStyle(fontSize: 12),
                         ),
                         value: _biometricEnabled,
@@ -387,7 +394,6 @@ class _SettingsPageState extends State<SettingsPage> {
                         MaterialPageRoute<void>(
                           builder: (_) => ClassifyReviewPage(
                             api: auth.api,
-                            familyId: family?.id ?? '',
                             categories: store.categories,
                           ),
                         ),
@@ -403,13 +409,6 @@ class _SettingsPageState extends State<SettingsPage> {
                       ),
                       trailing: const Icon(Icons.chevron_right_rounded, size: 18),
                       onTap: () => _editServer(context),
-                    ),
-                    const Divider(height: 1, indent: 16, endIndent: 16),
-                    ListTile(
-                      leading: const Icon(Icons.swap_horiz_rounded, size: 20),
-                      title: const Text('切换家庭'),
-                      trailing: const Icon(Icons.chevron_right_rounded, size: 18),
-                      onTap: () => auth.openFamilyPicker(),
                     ),
                     const Divider(height: 1, indent: 16, endIndent: 16),
                     ListTile(

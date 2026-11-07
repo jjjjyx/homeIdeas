@@ -1,6 +1,6 @@
 # admin · 管理后台（Vue3 + Vite）
 
-平台管理端：用户治理、家庭与账目查看、审计日志。构建产物会被 Go 服务 embed 进二进制，最终访问 `http://<host>/admin/`。
+单家庭管理端：家庭概览、账目、成员、邀请码、设备授权、审计日志。构建产物会被 Go 服务 embed 进二进制，最终访问 `http://<host>/admin/`。
 
 ## 技术栈
 
@@ -43,14 +43,16 @@ node scripts/screenshot.mjs http://127.0.0.1:8088 <管理员账号> <密码> out
 
 | 路由 | 说明 |
 |---|---|
-| `/admin/login` | 管理员登录（仅 `is_platform_admin` 可进） |
-| `/admin/dashboard` | 平台概览：用户数、家庭数、账单数、累计支出、今日新增 |
-| `/admin/users` | 用户列表、搜索、封禁/解禁（封禁立即吊销 refresh token） |
-| `/admin/families` | 家庭列表 + 抽屉式查看该家庭账目（含已删除） |
+| `/admin/login` | 管理员登录（唯一家庭的 owner/admin 可进） |
+| `/admin/dashboard` | 家庭概览：家庭名、成员数、账单数、累计支出、今日新增；可改家庭名 |
+| `/admin/ledger` | 家庭全部账目（含已删除，便于审计） |
+| `/admin/members` | 成员列表、添加成员、改角色、封禁/解禁、重置密码、移除、生成邀请码 |
+| `/admin/devices` | 设备授权：批准/拒绝/吊销（批准后 App 自动登录） |
 | `/admin/audit` | 审计日志，按 action 过滤 |
 
 ## 约定
 
 - 令牌存 `localStorage.admin_token`，401 自动跳登录页
 - 所有请求经 `src/api/client.ts`，统一拆 `{code,message,data}` 信封，只把 `data` 交给页面
-- 后台**不做业务写入**（不代用户记账），只读 + 治理操作
+- 后台**不做业务写入**（不代用户记账），只读 + 成员/设备/邀请码治理
+- 单家庭：没有家庭列表与切换；所有页面都围绕唯一家庭

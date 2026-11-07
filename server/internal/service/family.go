@@ -10,9 +10,14 @@ import (
 
 	"family-ledger/server/internal/domain"
 	"family-ledger/server/internal/pkg/id"
+	"family-ledger/server/internal/pkg/pw"
 	"family-ledger/server/internal/store"
 )
 
+// FamilyService 单家庭模式下的家庭信息与成员管理。
+//
+// 系统只有一个家庭：初始化时创建，之后不存在「创建/加入/切换家庭」，
+// 成员由户主或管理员在管理后台直接创建。
 type FamilyService struct {
 	db *store.DB
 }
@@ -27,94 +32,37 @@ type FamilyDetail struct {
 	Members []domain.Member
 }
 
-func (s *FamilyService) Create(ctx context.Context, userID, name, ip string) (*store.FamilyCard, error) {
-	name = strings.TrimSpace(name)
-	if name == "" || utf8.RuneCountInString(name) > 20 {
-		return nil, domain.ErrBadRequest.WithMessage("家庭名称需为 1-20 个字")
-	}
-
-	now := store.NowMS()
-	familyID := id.New()
-	var rev int64
-
-	err := s.db.WithTx(ctx, func(tx *sql.Tx) error {
-		family := &domain.Family{
-			ID:        familyID,
-			Name:      name,
-			OwnerID:   userID,
-			Currency:  "CNY",
-			Rev:       0,
-			CreatedAt: now,
-			UpdatedAt: now,
-		}
-		if err := s.db.CreateFamily(ctx, tx, family); err != nil {
-			return err
-		}
-		if err := s.db.AddMember(ctx, tx, familyID, userID, domain.RoleOwner, now); err != nil {
-			return err
-		}
-		r, err := s.db.BumpRev(ctx, tx, familyID, now)
-		if err != nil {
-			return err
-		}
-		rev = r
-		// 新家庭自动种入默认分类和账户，客户端首次同步即可拿到
-		if err := s.db.SeedDefaultCategories(ctx, tx, familyID, rev, now); err != nil {
-			return err
-		}
-		if err := s.db.SeedDefaultAccounts(ctx, tx, familyID, rev, now); err != nil {
-			return err
-		}
-		return s.db.AddAudit(ctx, tx, &domain.AuditLog{
-			FamilyID:   familyID,
-			UserID:     userID,
-			Action:     "family.create",
-			TargetType: "family",
-			TargetID:   familyID,
-			Detail:     name,
-			IP:         ip,
-		}, now)
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return &store.FamilyCard{
-		Family: domain.Family{
-			ID: familyID, Name: name, OwnerID: userID, Currency: "CNY",
-			Rev: rev, CreatedAt: now, UpdatedAt: now,
-		},
-		Role:        domain.RoleOwner,
-		MemberCount: 1,
-	}, nil
+// PrimaryID 返回唯一家庭 ID；系统未初始化时返回 ErrNotFound。
+func (s *FamilyService) PrimaryID(ctx context.Context) (string, error) {
+	return s.db.PrimaryFamilyID(ctx, s.db.SQL())
 }
 
-func (s *FamilyService) List(ctx context.Context, userID string) ([]store.FamilyCard, error) {
-	return s.db.FamiliesOfUser(ctx, s.db.SQL(), userID)
-}
-
-func (s *FamilyService) Detail(ctx context.Context, userID, familyID string) (*FamilyDetail, error) {
-	m, err := s.mustMember(ctx, s.db.SQL(), familyID, userID)
+func (s *FamilyService) Detail(ctx context.Context, userID string) (*FamilyDetail, error) {
+	family, err := s.db.PrimaryFamily(ctx, s.db.SQL())
 	if err != nil {
 		return nil, err
 	}
-	family, err := s.db.FamilyByID(ctx, s.db.SQL(), familyID)
+	m, err := s.mustMember(ctx, family.ID, userID)
 	if err != nil {
 		return nil, err
 	}
-	members, err := s.db.MembersOf(ctx, s.db.SQL(), familyID)
+	members, err := s.db.MembersOf(ctx, s.db.SQL(), family.ID)
 	if err != nil {
 		return nil, err
 	}
 	return &FamilyDetail{Family: family, MyRole: m.Role, Members: members}, nil
 }
 
-func (s *FamilyService) Rename(ctx context.Context, userID, familyID, name string) error {
+func (s *FamilyService) Rename(ctx context.Context, userID, name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" || utf8.RuneCountInString(name) > 20 {
 		return domain.ErrBadRequest.WithMessage("家庭名称需为 1-20 个字")
 	}
-	m, err := s.mustMember(ctx, s.db.SQL(), familyID, userID)
+	family, err := s.db.PrimaryFamily(ctx, s.db.SQL())
+	if err != nil {
+		return err
+	}
+	m, err := s.mustMember(ctx, family.ID, userID)
 	if err != nil {
 		return err
 	}
@@ -123,35 +71,134 @@ func (s *FamilyService) Rename(ctx context.Context, userID, familyID, name strin
 	}
 	now := store.NowMS()
 	return s.db.WithTx(ctx, func(tx *sql.Tx) error {
-		if err := s.db.RenameFamily(ctx, tx, familyID, name, now); err != nil {
+		if err := s.db.RenameFamily(ctx, tx, family.ID, name, now); err != nil {
 			return err
 		}
-		if _, err := s.db.BumpRev(ctx, tx, familyID, now); err != nil {
+		if _, err := s.db.BumpRev(ctx, tx, family.ID, now); err != nil {
 			return err
 		}
 		return s.db.AddAudit(ctx, tx, &domain.AuditLog{
-			FamilyID: familyID, UserID: userID, Action: "family.rename",
-			TargetType: "family", TargetID: familyID, Detail: name,
+			FamilyID: family.ID, UserID: userID, Action: "family.rename",
+			TargetType: "family", TargetID: family.ID, Detail: name,
 		}, now)
 	})
 }
 
-func (s *FamilyService) CreateInvite(ctx context.Context, userID, familyID, role string, ttlHours int, ip string) (*domain.Invite, error) {
-	m, err := s.mustMember(ctx, s.db.SQL(), familyID, userID)
+func (s *FamilyService) Members(ctx context.Context, userID string) ([]domain.Member, error) {
+	family, err := s.db.PrimaryFamily(ctx, s.db.SQL())
 	if err != nil {
 		return nil, err
 	}
-	if !isAdminRole(m.Role) {
+	if _, err := s.mustMember(ctx, family.ID, userID); err != nil {
+		return nil, err
+	}
+	return s.db.MembersOf(ctx, s.db.SQL(), family.ID)
+}
+
+// AddMember 由户主/管理员直接创建家庭成员账号。
+func (s *FamilyService) AddMember(ctx context.Context, actorID, account, password, nickname, role string) (*domain.Member, error) {
+	family, err := s.db.PrimaryFamily(ctx, s.db.SQL())
+	if err != nil {
+		return nil, err
+	}
+	actor, err := s.mustMember(ctx, family.ID, actorID)
+	if err != nil {
+		return nil, err
+	}
+	if !isAdminRole(actor.Role) {
+		return nil, domain.ErrForbidden.WithMessage("只有户主或管理员可以添加成员")
+	}
+
+	account = strings.ToLower(strings.TrimSpace(account))
+	if !accountPattern.MatchString(account) {
+		return nil, domain.ErrBadRequest.WithMessage("账号需为 3-32 位小写字母、数字、点、下划线或短横线")
+	}
+	if len(password) < 8 || len(password) > 72 {
+		return nil, domain.ErrBadRequest.WithMessage("密码长度需在 8-72 位之间")
+	}
+	nickname = strings.TrimSpace(nickname)
+	if nickname == "" {
+		nickname = account
+	}
+	if utf8.RuneCountInString(nickname) > 20 {
+		return nil, domain.ErrBadRequest.WithMessage("昵称最多 20 个字")
+	}
+	role = strings.TrimSpace(role)
+	if role == "" {
+		role = domain.RoleMember
+	}
+	if role != domain.RoleAdmin && role != domain.RoleMember {
+		return nil, domain.ErrBadRequest.WithMessage("新成员角色只能是 admin 或 member")
+	}
+	if role == domain.RoleAdmin && actor.Role != domain.RoleOwner {
+		return nil, domain.ErrForbidden.WithMessage("只有户主可以添加管理员")
+	}
+
+	hash, err := pw.Hash(password)
+	if err != nil {
+		return nil, err
+	}
+
+	now := store.NowMS()
+	userID := id.New()
+	err = s.db.WithTx(ctx, func(tx *sql.Tx) error {
+		if _, err := s.db.UserByAccount(ctx, tx, account); err == nil {
+			return domain.ErrConflict.WithMessage("账号已被占用")
+		} else if !errors.Is(err, domain.ErrNotFound) {
+			return err
+		}
+		user := &domain.User{
+			ID: userID, Account: account, PasswordHash: hash, Nickname: nickname,
+			Status: 1, CreatedAt: now, UpdatedAt: now,
+		}
+		if err := s.db.CreateUser(ctx, tx, user); err != nil {
+			return err
+		}
+		if err := s.db.AddMember(ctx, tx, family.ID, userID, role, now); err != nil {
+			return err
+		}
+		if _, err := s.db.BumpRev(ctx, tx, family.ID, now); err != nil {
+			return err
+		}
+		return s.db.AddAudit(ctx, tx, &domain.AuditLog{
+			FamilyID: family.ID, UserID: actorID, Action: "member.add",
+			TargetType: "user", TargetID: userID, Detail: role,
+		}, now)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &domain.Member{
+		FamilyID: family.ID, UserID: userID, Role: role, JoinedAt: now,
+		Nickname: nickname, Account: account,
+	}, nil
+}
+
+// CreateInvite 生成加入唯一家庭的邀请码。户主/管理员可发；只有户主能发 admin 邀请。
+func (s *FamilyService) CreateInvite(ctx context.Context, userID, role string, ttlHours int, ip string) (*domain.Invite, error) {
+	family, err := s.db.PrimaryFamily(ctx, s.db.SQL())
+	if err != nil {
+		return nil, err
+	}
+	actor, err := s.mustMember(ctx, family.ID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !isAdminRole(actor.Role) {
 		return nil, domain.ErrForbidden.WithMessage("只有户主或管理员可以生成邀请码")
 	}
+	role = strings.TrimSpace(role)
 	if role != domain.RoleAdmin && role != domain.RoleMember {
 		role = domain.RoleMember
 	}
-	if role == domain.RoleAdmin && m.Role != domain.RoleOwner {
+	if role == domain.RoleAdmin && actor.Role != domain.RoleOwner {
 		return nil, domain.ErrForbidden.WithMessage("只有户主可以邀请管理员")
 	}
-	if ttlHours <= 0 || ttlHours > 24*30 {
+	if ttlHours <= 0 {
 		ttlHours = 24 * 7
+	}
+	if ttlHours > 24*30 {
+		ttlHours = 24 * 30
 	}
 
 	now := store.NowMS()
@@ -166,7 +213,7 @@ func (s *FamilyService) CreateInvite(ctx context.Context, userID, familyID, role
 			}
 			inv := &domain.Invite{
 				ID:        id.New(),
-				FamilyID:  familyID,
+				FamilyID:  family.ID,
 				Code:      code,
 				Role:      role,
 				CreatedBy: userID,
@@ -186,7 +233,7 @@ func (s *FamilyService) CreateInvite(ctx context.Context, userID, familyID, role
 			return domain.ErrInternal.WithMessage("生成邀请码失败，请重试")
 		}
 		return s.db.AddAudit(ctx, tx, &domain.AuditLog{
-			FamilyID: familyID, UserID: userID, Action: "family.invite",
+			FamilyID: family.ID, UserID: userID, Action: "family.invite",
 			TargetType: "invite", TargetID: invite.ID, Detail: role, IP: ip,
 		}, now)
 	})
@@ -196,79 +243,15 @@ func (s *FamilyService) CreateInvite(ctx context.Context, userID, familyID, role
 	return invite, nil
 }
 
-func (s *FamilyService) Join(ctx context.Context, userID, code, ip string) (*store.FamilyCard, error) {
-	code = strings.ToUpper(strings.TrimSpace(code))
-	if code == "" {
-		return nil, domain.ErrBadRequest.WithMessage("请输入邀请码")
-	}
-
-	now := store.NowMS()
-	var family *domain.Family
-
-	err := s.db.WithTx(ctx, func(tx *sql.Tx) error {
-		inv, err := s.db.InviteByCode(ctx, tx, code)
-		if err != nil {
-			return domain.ErrInviteInvalid
-		}
-		if inv.UsedBy != "" {
-			return domain.ErrInviteInvalid.WithMessage("邀请码已被使用")
-		}
-		if inv.ExpiresAt != nil && *inv.ExpiresAt < now {
-			return domain.ErrInviteInvalid.WithMessage("邀请码已过期")
-		}
-		if _, err := s.db.MemberOf(ctx, tx, inv.FamilyID, userID); err == nil {
-			return domain.ErrConflict.WithMessage("你已经在这个家庭里了")
-		}
-
-		f, err := s.db.FamilyByID(ctx, tx, inv.FamilyID)
-		if err != nil {
-			return domain.ErrInviteInvalid
-		}
-		family = f
-
-		role := inv.Role
-		if role != domain.RoleAdmin && role != domain.RoleMember {
-			role = domain.RoleMember
-		}
-		// 先原子核销，失败说明被别人抢先用了
-		used, err := s.db.MarkInviteUsed(ctx, tx, inv.ID, userID, now)
-		if err != nil {
-			return err
-		}
-		if !used {
-			return domain.ErrInviteInvalid.WithMessage("邀请码已被使用")
-		}
-		if err := s.db.AddMember(ctx, tx, inv.FamilyID, userID, role, now); err != nil {
-			return err
-		}
-		if _, err := s.db.BumpRev(ctx, tx, inv.FamilyID, now); err != nil {
-			return err
-		}
-		return s.db.AddAudit(ctx, tx, &domain.AuditLog{
-			FamilyID: inv.FamilyID, UserID: userID, Action: "family.join",
-			TargetType: "family", TargetID: inv.FamilyID, IP: ip,
-		}, now)
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	count, _ := s.db.CountMembers(ctx, s.db.SQL(), family.ID)
-	return &store.FamilyCard{Family: *family, Role: domain.RoleMember, MemberCount: count}, nil
-}
-
-func (s *FamilyService) Members(ctx context.Context, userID, familyID string) ([]domain.Member, error) {
-	if _, err := s.mustMember(ctx, s.db.SQL(), familyID, userID); err != nil {
-		return nil, err
-	}
-	return s.db.MembersOf(ctx, s.db.SQL(), familyID)
-}
-
-func (s *FamilyService) SetRole(ctx context.Context, actorID, familyID, targetID, role string) error {
+func (s *FamilyService) SetRole(ctx context.Context, actorID, targetID, role string) error {
 	if role != domain.RoleAdmin && role != domain.RoleMember {
 		return domain.ErrBadRequest.WithMessage("角色只能是 admin 或 member")
 	}
-	actor, err := s.mustMember(ctx, s.db.SQL(), familyID, actorID)
+	family, err := s.db.PrimaryFamily(ctx, s.db.SQL())
+	if err != nil {
+		return err
+	}
+	actor, err := s.mustMember(ctx, family.ID, actorID)
 	if err != nil {
 		return err
 	}
@@ -278,31 +261,35 @@ func (s *FamilyService) SetRole(ctx context.Context, actorID, familyID, targetID
 	if actorID == targetID {
 		return domain.ErrBadRequest.WithMessage("不能修改自己的角色")
 	}
-	if _, err := s.mustMember(ctx, s.db.SQL(), familyID, targetID); err != nil {
+	if _, err := s.mustMember(ctx, family.ID, targetID); err != nil {
 		return err
 	}
 
 	now := store.NowMS()
 	return s.db.WithTx(ctx, func(tx *sql.Tx) error {
-		if err := s.db.UpdateMemberRole(ctx, tx, familyID, targetID, role); err != nil {
+		if err := s.db.UpdateMemberRole(ctx, tx, family.ID, targetID, role); err != nil {
 			return err
 		}
-		if _, err := s.db.BumpRev(ctx, tx, familyID, now); err != nil {
+		if _, err := s.db.BumpRev(ctx, tx, family.ID, now); err != nil {
 			return err
 		}
 		return s.db.AddAudit(ctx, tx, &domain.AuditLog{
-			FamilyID: familyID, UserID: actorID, Action: "member.set_role",
+			FamilyID: family.ID, UserID: actorID, Action: "member.set_role",
 			TargetType: "user", TargetID: targetID, Detail: role,
 		}, now)
 	})
 }
 
-func (s *FamilyService) RemoveMember(ctx context.Context, actorID, familyID, targetID string) error {
-	actor, err := s.mustMember(ctx, s.db.SQL(), familyID, actorID)
+func (s *FamilyService) RemoveMember(ctx context.Context, actorID, targetID string) error {
+	family, err := s.db.PrimaryFamily(ctx, s.db.SQL())
 	if err != nil {
 		return err
 	}
-	target, err := s.mustMember(ctx, s.db.SQL(), familyID, targetID)
+	actor, err := s.mustMember(ctx, family.ID, actorID)
+	if err != nil {
+		return err
+	}
+	target, err := s.mustMember(ctx, family.ID, targetID)
 	if err != nil {
 		return err
 	}
@@ -318,46 +305,25 @@ func (s *FamilyService) RemoveMember(ctx context.Context, actorID, familyID, tar
 
 	now := store.NowMS()
 	return s.db.WithTx(ctx, func(tx *sql.Tx) error {
-		if err := s.db.RemoveMember(ctx, tx, familyID, targetID); err != nil {
+		if err := s.db.RemoveMember(ctx, tx, family.ID, targetID); err != nil {
 			return err
 		}
-		if _, err := s.db.BumpRev(ctx, tx, familyID, now); err != nil {
+		// 移除后立即让该成员的设备令牌失效
+		if err := s.db.RevokeTokensOfUser(ctx, tx, targetID, now); err != nil {
+			return err
+		}
+		if _, err := s.db.BumpRev(ctx, tx, family.ID, now); err != nil {
 			return err
 		}
 		return s.db.AddAudit(ctx, tx, &domain.AuditLog{
-			FamilyID: familyID, UserID: actorID, Action: "member.remove",
+			FamilyID: family.ID, UserID: actorID, Action: "member.remove",
 			TargetType: "user", TargetID: targetID,
 		}, now)
 	})
 }
 
-func (s *FamilyService) Leave(ctx context.Context, userID, familyID string) error {
-	actor, err := s.mustMember(ctx, s.db.SQL(), familyID, userID)
-	if err != nil {
-		return err
-	}
-	if actor.Role == domain.RoleOwner {
-		return domain.ErrForbidden.WithMessage("户主不能退出家庭，请先转让或删除家庭")
-	}
-
-	now := store.NowMS()
-	return s.db.WithTx(ctx, func(tx *sql.Tx) error {
-		if err := s.db.RemoveMember(ctx, tx, familyID, userID); err != nil {
-			return err
-		}
-		if _, err := s.db.BumpRev(ctx, tx, familyID, now); err != nil {
-			return err
-		}
-		return s.db.AddAudit(ctx, tx, &domain.AuditLog{
-			FamilyID: familyID, UserID: userID, Action: "family.leave",
-			TargetType: "family", TargetID: familyID,
-		}, now)
-	})
-}
-
-// mustMember 是数据域校验的唯一入口：不属于该家庭一律 403，避免暴露家庭是否存在。
-func (s *FamilyService) mustMember(ctx context.Context, q store.Querier, familyID, userID string) (*domain.Member, error) {
-	m, err := s.db.MemberOf(ctx, q, familyID, userID)
+func (s *FamilyService) mustMember(ctx context.Context, familyID, userID string) (*domain.Member, error) {
+	m, err := s.db.MemberOf(ctx, s.db.SQL(), familyID, userID)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			return nil, domain.ErrForbidden

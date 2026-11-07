@@ -26,7 +26,7 @@ func (r mailConfigReq) toInput() service.MailConfigInput {
 }
 
 func (h *Handler) getMailConfig(w http.ResponseWriter, r *http.Request) {
-	status, err := h.mail.Status(r.Context(), r.PathValue("id"), userIDFrom(r.Context()))
+	status, err := h.mail.Status(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()))
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -40,7 +40,7 @@ func (h *Handler) saveMailConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	if err := h.mail.SaveConfig(r.Context(), r.PathValue("id"), userIDFrom(r.Context()), req.toInput()); err != nil {
+	if err := h.mail.SaveConfig(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()), req.toInput()); err != nil {
 		writeError(w, r, err)
 		return
 	}
@@ -53,7 +53,7 @@ func (h *Handler) testMailConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	if err := h.mail.TestConnection(r.Context(), r.PathValue("id"), userIDFrom(r.Context()), req.toInput()); err != nil {
+	if err := h.mail.TestConnection(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()), req.toInput()); err != nil {
 		writeError(w, r, err)
 		return
 	}
@@ -61,7 +61,7 @@ func (h *Handler) testMailConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) syncMail(w http.ResponseWriter, r *http.Request) {
-	result, err := h.mail.SyncFamily(r.Context(), r.PathValue("id"))
+	result, err := h.mail.SyncFamily(r.Context(), familyIDFrom(r.Context()))
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -81,7 +81,7 @@ func (h *Handler) submitMailPassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	result, err := h.mail.SubmitPassword(r.Context(), r.PathValue("id"), userIDFrom(r.Context()), req.MessageID, req.Password)
+	result, err := h.mail.SubmitPassword(r.Context(), familyIDFrom(r.Context()), userIDFrom(r.Context()), req.MessageID, req.Password)
 	if err != nil {
 		writeError(w, r, err)
 		return

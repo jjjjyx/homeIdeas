@@ -77,7 +77,6 @@ func (h *Handler) adminPendingDevices(w http.ResponseWriter, r *http.Request) {
 			m["last_account"] = it.LastAccount
 			m["last_nickname"] = it.LastNickname
 			m["last_approved_at"] = it.LastApprovedAt
-			m["last_family_id"] = it.LastFamilyID
 			m["last_role"] = it.LastRole
 		}
 		items = append(items, m)
@@ -104,7 +103,6 @@ type deviceApproveReq struct {
 	NewAccount  string `json:"new_account"`
 	NewNickname string `json:"new_nickname"`
 	NewPassword string `json:"new_password"`
-	FamilyID    string `json:"family_id"`
 	Role        string `json:"role"`
 }
 
@@ -117,7 +115,7 @@ func (h *Handler) adminApproveDevice(w http.ResponseWriter, r *http.Request) {
 	result, err := h.devices.Approve(r.Context(), userIDFrom(r.Context()), r.PathValue("did"),
 		service.ApproveInput{
 			UserID: req.UserID, NewAccount: req.NewAccount, NewNickname: req.NewNickname,
-			NewPassword: req.NewPassword, FamilyID: req.FamilyID, Role: req.Role,
+			NewPassword: req.NewPassword, Role: req.Role,
 		})
 	if err != nil {
 		writeError(w, r, err)
@@ -147,7 +145,7 @@ func deviceJSON(d domain.Device) map[string]any {
 		"id": d.ID, "device_uid": d.DeviceUID, "device_key": d.DeviceKey, "model": d.Model, "os_version": d.OSVersion,
 		"app_version": d.AppVersion, "ip": d.IP, "status": d.Status, "pair_code": d.PairCode,
 		"created_at": d.CreatedAt, "expires_at": d.ExpiresAt, "user_id": d.UserID,
-		"family_id": d.FamilyID, "role": d.Role,
+		"role": d.Role,
 	}
 	if d.ApprovedAt != nil {
 		out["approved_at"] = *d.ApprovedAt
